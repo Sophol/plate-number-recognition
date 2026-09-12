@@ -34,7 +34,8 @@ class Settings(BaseSettings):
 
     # "template" is the classical-CV fallback that ships by default; "paddle"
     # reads real plate typefaces but needs paddlepaddle + paddleocr installed.
-    # "contour" is the classical-CV locator that ships by default; "paddle"
+    # "onnx" is the trained YOLO detector and the production choice; "contour"
+    # is the classical-CV locator that ships by default; "paddle"
     # uses PaddleOCR's text detector filtered by plate format, which is what
     # actually finds plates in real photographs.
     detector_backend: str = "contour"

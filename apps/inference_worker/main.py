@@ -38,13 +38,26 @@ def build_ocr(backend: str = "template", use_gpu: bool = False):
     return TemplateOCR()
 
 
-def build_detector(backend: str = "contour"):
+def build_detector(backend: str = "contour", model_path: str | None = None):
     """Pick a plate locator by name.
 
+    "onnx" is the trained YOLO detector and the only one meant for production;
     "contour" needs no extra dependencies but finds bright rectangles rather
     than plates; "paddle" runs PaddleOCR's text detector and keeps only
     plate-shaped results. Falls back rather than taking the worker down.
+
+    The onnx fallback is the one to watch in production: a missing model file
+    silently downgrades gate accuracy to the classical-CV locator. The warning
+    is the only signal, so alert on it.
     """
+    if backend == "onnx":
+        from apps.inference_worker.onnx_detector import OnnxPlateDetector
+
+        try:
+            return OnnxPlateDetector(model_path or get_settings().detector_model_path)
+        except RuntimeError as exc:
+            log.warning("onnx_detector_unavailable_using_contour", error=str(exc))
+            return ContourPlateDetector()
     if backend == "paddle":
         from apps.inference_worker.paddle_detector import PaddlePlateDetector
 
