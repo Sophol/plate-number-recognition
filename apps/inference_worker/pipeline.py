@@ -1,6 +1,6 @@
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import structlog
 
@@ -99,6 +99,10 @@ class InferencePipeline:
         # Saves crop + frame for each committed read; None keeps nothing.
         self.container_capture = container_capture
         self.container_unknown_min_confidence = container_unknown_min_confidence
+        # Rejected candidates are captured for training, but a static texture
+        # re-reads as the same string for as long as it is lit, so once per
+        # number per camera per this interval is plenty.
+        self._rejected_saved_at: dict[tuple[str, str], datetime] = {}
 
     def process(self, frame: Frame) -> list[CommittedRead]:
         detections = self.detector.detect(frame.image)
@@ -170,20 +174,10 @@ class InferencePipeline:
         )
         if found is None:
             return []
-        if found.result.is_known is not True:
-            # PAS has not seen this number, so the read stands on the checksum
-            # alone. Demand corroboration: something drove in, and the OCR was
-            # sure. The first live false positive was a kerb edge in an empty
-            # lane, read twice as the same valid-looking number at 0.70.
-            if not vehicles:
-                log.debug("container_read_dropped", reason="no_vehicle",
-                          container_number=found.result.number.canonical)
-                return []
-            if found.result.confidence < self.container_unknown_min_confidence:
-                log.debug("container_read_dropped", reason="unknown_low_confidence",
-                          container_number=found.result.number.canonical,
-                          confidence=round(found.result.confidence, 3))
-                return []
+        reason = self._reject_reason(found.result, vehicles)
+        if reason is not None:
+            self._capture_rejected(frame, found, vehicles, reason)
+            return []
         vote = self.container_voter.add(frame.camera_id, found.result, frame.frame_ts)
         if vote is None:
             return []
@@ -219,6 +213,49 @@ class InferencePipeline:
                 frame_path=frame_path,
             )
         ]
+
+    def _reject_reason(self, result, vehicles) -> str | None:
+        """Why a checksum-valid read must not commit, or None if it may.
+
+        The checksum alone is weak: a random string passes it one time in ten,
+        and static texture (a kerb, road chevrons, a window frame) re-reads as
+        the same string frame after frame, so the voter agrees with itself.
+        Every one of the first live commits was exactly that, in an empty lane.
+        So: a vehicle must be in the frame, always. A number PAS knows and the
+        OCR read outright is then trusted; a snapped read is by construction
+        an OCR error corrected by lookup (with 171k known numbers, garbage is
+        often one edit from a real one), so it and unknown numbers must also be
+        confident.
+        """
+        if not vehicles:
+            return "no_vehicle"
+        trusted = result.is_known is True and not result.was_snapped
+        if not trusted and result.confidence < self.container_unknown_min_confidence:
+            return "snapped_low_confidence" if result.was_snapped else "unknown_low_confidence"
+        return None
+
+    def _capture_rejected(self, frame: Frame, found, vehicles, reason: str) -> None:
+        number = found.result.number.canonical
+        log.info("container_read_rejected", camera_id=frame.camera_id, container_number=number,
+                 reason=reason, confidence=round(found.result.confidence, 3),
+                 was_snapped=found.result.was_snapped, ocr_text=found.result.text)
+        if self.container_capture is None:
+            return
+        key = (frame.camera_id, number)
+        last = self._rejected_saved_at.get(key)
+        if last is not None and frame.frame_ts - last < timedelta(minutes=10):
+            return
+        self._rejected_saved_at[key] = frame.frame_ts
+        try:
+            self.container_capture.save(
+                frame.image, found.region, number, uuid.uuid4(), frame.frame_ts, rejected=True,
+                meta={"camera_id": frame.camera_id, "rejected": reason, "ocr_text": found.result.text,
+                      "confidence": round(found.result.confidence, 4), "is_known": found.result.is_known,
+                      "was_snapped": found.result.was_snapped,
+                      "vehicles": [[v.x1, v.y1, v.x2, v.y2, v.vehicle_type, v.colour] for v in vehicles]},
+            )
+        except Exception:
+            log.exception("container_capture_failed", container_number=number)
 
     def _resolve_province(self, plate_text: str, bottom_zone):
         """Prefer the plate's numeric prefix; fall back to reading the text zone."""

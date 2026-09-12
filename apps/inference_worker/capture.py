@@ -38,15 +38,21 @@ class ContainerCapture:
         self.jpeg_quality = jpeg_quality
 
     def save(self, frame: np.ndarray, region: Region, number: str, read_id, frame_ts: datetime,
-             meta: dict | None = None) -> tuple[str, str]:
-        """Write crop, frame and sidecar; return (crop_path, frame_path) relative to root."""
+             meta: dict | None = None, rejected: bool = False) -> tuple[str, str]:
+        """Write crop, frame and sidecar; return (crop_path, frame_path) relative to root.
+
+        `rejected` files a candidate the gate refused to commit under rejected/:
+        no database row points at it, but it is exactly the hard negative (or
+        the missed truck) the next model version should be trained on.
+        """
         # Local wall-clock time in the name: the file should match the camera's
         # overlay and the gate log, which are what a person compares it against.
         local = frame_ts.astimezone() if frame_ts.tzinfo else frame_ts
-        day = self.root / local.strftime("%Y-%m-%d")
+        day = (self.root / "rejected" if rejected else self.root) / local.strftime("%Y-%m-%d")
         day.mkdir(parents=True, exist_ok=True)
         stem = f"{number}_{local.strftime('%H%M%S')}_{str(read_id)[:8]}"
-        crop_rel, frame_rel = f"{day.name}/{stem}.jpg", f"{day.name}/{stem}_frame.jpg"
+        prefix = f"rejected/{day.name}" if rejected else day.name
+        crop_rel, frame_rel = f"{prefix}/{stem}.jpg", f"{prefix}/{stem}_frame.jpg"
         params = [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality]
 
         crop = region.crop(frame)

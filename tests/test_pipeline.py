@@ -292,7 +292,7 @@ def test_committed_container_carries_evidence_paths(tmp_path):
     pipe = InferencePipeline(
         detector=StubDetector(), ocr=StubOCR("2D-0888"), province_classifier=StubProvince(),
         model_version="test-v1", container_reader=StubReader(), container_votes_required=1,
-        container_capture=ContainerCapture(tmp_path),
+        container_capture=ContainerCapture(tmp_path), vehicle_detector=OneTruck(),
     )
     (read,) = pipe.process_containers(frame_at(0))
     assert read.container_number == "TCLU5437389"
@@ -316,6 +316,7 @@ def test_committed_container_without_capture_has_no_paths():
     pipe = InferencePipeline(
         detector=StubDetector(), ocr=StubOCR("2D-0888"), province_classifier=StubProvince(),
         model_version="test-v1", container_reader=StubReader(), container_votes_required=1,
+        vehicle_detector=OneTruck(),
     )
     (read,) = pipe.process_containers(frame_at(0))
     assert read.crop_path is None and read.frame_path is None
@@ -369,11 +370,43 @@ def test_unknown_number_needs_high_confidence_even_with_a_vehicle():
     assert len(pipe.process_containers(frame_at(0))) == 1
 
 
-def test_known_number_commits_without_corroboration():
-    """PAS membership is the strong evidence; it needs neither a vehicle nor a sure OCR."""
-    pipe = _container_pipe(_reader("TCLU5437389", 0.55, True), NoVehicle())
+def test_known_number_commits_at_any_confidence_with_a_vehicle():
+    """PAS membership plus a truck is the strong evidence; the OCR need not be sure."""
+    pipe = _container_pipe(_reader("TCLU5437389", 0.55, True), OneTruck())
     (read,) = pipe.process_containers(frame_at(0))
     assert read.container_number == "TCLU5437389" and read.is_known is True
+
+
+def test_known_number_in_empty_lane_is_dropped():
+    """No truck, no container -- however well PAS knows the number."""
+    pipe = _container_pipe(_reader("TCLU5437389", 0.95, True), NoVehicle())
+    assert pipe.process_containers(frame_at(0)) == []
+
+
+def test_snapped_read_is_not_trusted_as_known():
+    """Road chevrons read as HPCU225730 and snapped to a real HPCU5225730: known, but wrong."""
+    from apps.inference_worker.container import parse
+    from apps.inference_worker.container_locator import Region
+    from apps.inference_worker.container_ocr import ContainerReadResult
+    from apps.inference_worker.container_pipeline import ContainerDetection
+
+    class Snapped:
+        def read_frame(self, image, boxes=()):
+            return ContainerDetection(Region(0, 0, 10, 5, False),
+                                      ContainerReadResult("HPCU225730", 0.77, parse("HPCU5225730"), True, True))
+    assert _container_pipe(Snapped(), OneTruck()).process_containers(frame_at(0)) == []
+
+
+def test_rejected_candidate_is_captured_once_per_number(tmp_path):
+    from apps.inference_worker.capture import ContainerCapture
+    pipe = _container_pipe(_reader("OSLU3601571", 0.95, False), NoVehicle(),
+                           container_capture=ContainerCapture(tmp_path))
+    for i in range(3):
+        assert pipe.process_containers(frame_at(i)) == []
+    rejected = list((tmp_path / "rejected").rglob("*.jpg"))
+    assert len(rejected) == 2                      # one crop + one frame, not three of each
+    assert all("OSLU3601571" in f.name for f in rejected)
+    assert not list(tmp_path.glob("2*"))           # nothing filed as committed
 
 
 def test_pas_silence_counts_as_unknown():
