@@ -1,3 +1,11 @@
-/** The FastAPI server. Its CORS allowlist only contains http://localhost:4200,
- *  so the dev server must run on that port. */
-export const API_BASE = 'http://localhost:8000';
+/** Same-origin API prefix.
+ *
+ *  nginx serves the built app at / and proxies /api/ to the FastAPI process, so
+ *  a relative base means the browser never makes a cross-origin request and CORS
+ *  never applies. It also means the same build works on any hostname - no
+ *  rebuild to move between staging and production.
+ *
+ *  For `ng serve`, proxy.conf.json forwards /api to the local API so development
+ *  behaves the same way.
+ */
+export const API_BASE = '/api';
