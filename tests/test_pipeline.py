@@ -311,7 +311,7 @@ def test_committed_container_without_capture_has_no_paths():
         def read_frame(self, image, boxes=()):
             n = parse("TCLU5437389")
             return ContainerDetection(Region(0, 0, 10, 5, False),
-                                      ContainerReadResult("TCLU5437389", 0.9, n, None, False))
+                                      ContainerReadResult("TCLU5437389", 0.9, n, True, False))
 
     pipe = InferencePipeline(
         detector=StubDetector(), ocr=StubOCR("2D-0888"), province_classifier=StubProvince(),
@@ -319,3 +319,63 @@ def test_committed_container_without_capture_has_no_paths():
     )
     (read,) = pipe.process_containers(frame_at(0))
     assert read.crop_path is None and read.frame_path is None
+
+
+# --- unknown-number corroboration ------------------------------------------
+
+
+def _container_pipe(reader, vehicle_detector=None, **kw):
+    return InferencePipeline(
+        detector=StubDetector(), ocr=StubOCR("2D-0888"), province_classifier=StubProvince(),
+        model_version="test-v1", container_reader=reader, container_votes_required=1,
+        vehicle_detector=vehicle_detector, **kw,
+    )
+
+
+def _reader(number, conf, known):
+    from apps.inference_worker.container import parse
+    from apps.inference_worker.container_locator import Region
+    from apps.inference_worker.container_ocr import ContainerReadResult
+    from apps.inference_worker.container_pipeline import ContainerDetection
+
+    class R:
+        def read_frame(self, image, boxes=()):
+            return ContainerDetection(Region(0, 0, 10, 5, False),
+                                      ContainerReadResult(number, conf, parse(number), known, False))
+    return R()
+
+
+class OneTruck:
+    def detect(self, image):
+        from apps.inference_worker.vehicle import Vehicle
+        return [Vehicle(0, 0, 300, 200, "truck", 0.9, "white", 0.8)]
+
+
+class NoVehicle:
+    def detect(self, image):
+        return []
+
+
+def test_unknown_number_in_empty_lane_is_dropped():
+    """A kerb edge read as a valid-looking number with nothing driving through."""
+    pipe = _container_pipe(_reader("OSLU3601571", 0.95, False), NoVehicle())
+    assert pipe.process_containers(frame_at(0)) == []
+
+
+def test_unknown_number_needs_high_confidence_even_with_a_vehicle():
+    pipe = _container_pipe(_reader("OSLU3601571", 0.7, False), OneTruck())
+    assert pipe.process_containers(frame_at(0)) == []
+    pipe = _container_pipe(_reader("OSLU3601571", 0.85, False), OneTruck())
+    assert len(pipe.process_containers(frame_at(0))) == 1
+
+
+def test_known_number_commits_without_corroboration():
+    """PAS membership is the strong evidence; it needs neither a vehicle nor a sure OCR."""
+    pipe = _container_pipe(_reader("TCLU5437389", 0.55, True), NoVehicle())
+    (read,) = pipe.process_containers(frame_at(0))
+    assert read.container_number == "TCLU5437389" and read.is_known is True
+
+
+def test_pas_silence_counts_as_unknown():
+    pipe = _container_pipe(_reader("TCLU5437389", 0.95, None), NoVehicle())
+    assert pipe.process_containers(frame_at(0)) == []

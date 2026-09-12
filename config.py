@@ -62,6 +62,12 @@ class Settings(BaseSettings):
     container_ocr_model_path: str = "models/container_ocr.onnx"
     container_known_list_path: str = "dataset/pas/containers.json"
     container_min_confidence: float = 0.5
+    # A number PAS does not know is weak evidence: a random OCR string passes the
+    # check digit one time in ten, and static texture (a kerb, a wall edge)
+    # produces the same hallucination frame after frame, so the voter agrees
+    # with itself. Such a read commits only with a vehicle in the frame and at
+    # least this confidence. A PAS-known number needs neither.
+    container_unknown_min_confidence: float = 0.8
     # Where the crop + full frame of every committed container read are kept
     # (see apps/inference_worker/capture.py). Empty disables capture. The API
     # serves these files back for the console, so it needs the same setting.

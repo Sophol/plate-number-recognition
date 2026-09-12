@@ -143,6 +143,7 @@ def build_pipeline(
         container_reader=build_container_reader(),
         container_every_n_frames=get_settings().container_every_n_frames,
         container_capture=build_container_capture(),
+        container_unknown_min_confidence=get_settings().container_unknown_min_confidence,
     )
 
 

@@ -80,6 +80,7 @@ class InferencePipeline:
         container_votes_required: int = 2,
         container_every_n_frames: int = 1,
         container_capture=None,
+        container_unknown_min_confidence: float = 0.8,
     ) -> None:
         self.detector = detector
         self.ocr = ocr
@@ -97,6 +98,7 @@ class InferencePipeline:
         self._container_frame_counter = 0
         # Saves crop + frame for each committed read; None keeps nothing.
         self.container_capture = container_capture
+        self.container_unknown_min_confidence = container_unknown_min_confidence
 
     def process(self, frame: Frame) -> list[CommittedRead]:
         detections = self.detector.detect(frame.image)
@@ -168,6 +170,20 @@ class InferencePipeline:
         )
         if found is None:
             return []
+        if found.result.is_known is not True:
+            # PAS has not seen this number, so the read stands on the checksum
+            # alone. Demand corroboration: something drove in, and the OCR was
+            # sure. The first live false positive was a kerb edge in an empty
+            # lane, read twice as the same valid-looking number at 0.70.
+            if not vehicles:
+                log.debug("container_read_dropped", reason="no_vehicle",
+                          container_number=found.result.number.canonical)
+                return []
+            if found.result.confidence < self.container_unknown_min_confidence:
+                log.debug("container_read_dropped", reason="unknown_low_confidence",
+                          container_number=found.result.number.canonical,
+                          confidence=round(found.result.confidence, 3))
+                return []
         vote = self.container_voter.add(frame.camera_id, found.result, frame.frame_ts)
         if vote is None:
             return []

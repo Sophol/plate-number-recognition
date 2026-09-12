@@ -40,9 +40,12 @@ class ContainerCapture:
     def save(self, frame: np.ndarray, region: Region, number: str, read_id, frame_ts: datetime,
              meta: dict | None = None) -> tuple[str, str]:
         """Write crop, frame and sidecar; return (crop_path, frame_path) relative to root."""
-        day = self.root / frame_ts.strftime("%Y-%m-%d")
+        # Local wall-clock time in the name: the file should match the camera's
+        # overlay and the gate log, which are what a person compares it against.
+        local = frame_ts.astimezone() if frame_ts.tzinfo else frame_ts
+        day = self.root / local.strftime("%Y-%m-%d")
         day.mkdir(parents=True, exist_ok=True)
-        stem = f"{number}_{frame_ts.strftime('%H%M%S')}_{str(read_id)[:8]}"
+        stem = f"{number}_{local.strftime('%H%M%S')}_{str(read_id)[:8]}"
         crop_rel, frame_rel = f"{day.name}/{stem}.jpg", f"{day.name}/{stem}_frame.jpg"
         params = [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality]
 

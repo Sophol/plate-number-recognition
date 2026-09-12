@@ -22,7 +22,8 @@ def test_save_writes_crop_frame_and_sidecar(tmp_path):
     crop_rel, frame_rel = store.save(frame, Region(100, 40, 400, 80, False), "CRCU4352365", read_id, T0,
                                      meta={"ocr_text": "CRCU4352365"})
 
-    assert crop_rel == f"2026-09-12/CRCU4352365_201156_{str(read_id)[:8]}.jpg"
+    local = T0.astimezone()
+    assert crop_rel == f"{local:%Y-%m-%d}/CRCU4352365_{local:%H%M%S}_{str(read_id)[:8]}.jpg"
     assert frame_rel.endswith("_frame.jpg")
     crop = cv2.imread(str(tmp_path / crop_rel))
     full = cv2.imread(str(tmp_path / frame_rel))
