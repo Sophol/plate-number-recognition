@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     ocr_use_gpu: bool = False
 
     detector_model_path: str = "models/plate_detector.onnx"
+    # Minimum YOLO confidence for a box to count as a plate. Site-dependent:
+    # a cluttered barrier scene wants this higher than a clean driveway.
+    detector_min_confidence: float = 0.5
     province_model_path: str = "models/province_classifier.onnx"
     model_version: str = "v0-dev"
 

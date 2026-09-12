@@ -78,6 +78,37 @@ fractional (`ROI(x1=0.0, y1=0.0, x2=0.5, y2=1.0)`) so it survives a resolution
 change. Tune `motion_min_changed_fraction` per camera — too low wastes GPU on
 noise, too high misses distant vehicles.
 
+### Camera placement — read this before mounting anything
+
+Learned on the first live run against gate camera BOOT-06-OUT (2560×1440, mounted
+high on the booth canopy, looking down the lane):
+
+- The first truck's plate was **98×41 px** — findable by the detector, too small
+  for OCR. The Khmer top zone was a smudge.
+- The next truck stopped at the barrier with its **plate below the bottom edge of
+  the frame**. Thirty seconds of sampling with a vehicle present: zero detections.
+
+No model fixes either. A camera aimed at roofs does not see plates, and a plate
+that is 40 px tall in a 1440 px frame will not OCR no matter how it is trained.
+The standard ANPR mounting is a **dedicated camera at roughly bumper height,
+aimed at the stop line**, so the plate is large and square-on at the moment the
+vehicle is stationary. An overview camera is useful for context and for the
+operator; it is not the camera the pipeline should read from.
+
+Until the mounting is right, everything downstream is blocked: Phase 0 footage
+recorded from the wrong angle trains the wrong model, and fine-tuning cannot
+recover pixels that were never captured.
+
+Two other things from that run:
+
+- **The detector confidence floor is 0.5, not YOLO's default 0.25.** A barrier
+  scene is full of plate-shaped rectangles — hazard stripes, container
+  corrugation, booth signage — and at 0.25 a 0.29-confidence box on nothing was
+  voted through as a read. `DETECTOR_MIN_CONFIDENCE` tunes it per site.
+- Register RTSP passwords **URL-encoded**. `$` is not legal in a URL password;
+  `Pa$$w0rd` must be stored as `Pa%24%24w0rd` or the connection fails on some
+  builds and works by luck on others.
+
 ### Gate safety
 
 `handlers.decide()` fails closed. A gate opens only on an explicit whitelist

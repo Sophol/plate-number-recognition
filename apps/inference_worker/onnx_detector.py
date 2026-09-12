@@ -28,7 +28,13 @@ from apps.inference_worker.interfaces import Detection
 log = structlog.get_logger()
 
 DEFAULT_IMGSZ = 640
-DEFAULT_CONF = 0.25
+# 0.25 is YOLO's conventional default and is too low for a gate. A busy
+# barrier scene is full of plate-shaped rectangles - hazard stripes, container
+# corrugation, booth signage - and on the first live run a 0.29-confidence box on
+# nothing in particular was voted through as a read. Raising the floor costs a
+# little recall on hard plates; the tracker sees each vehicle across many frames,
+# so one missed frame is cheap and a phantom read that reaches the gate is not.
+DEFAULT_CONF = 0.5
 DEFAULT_IOU = 0.45
 MAX_DETECTIONS = 10
 

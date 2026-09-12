@@ -54,7 +54,11 @@ def build_detector(backend: str = "contour", model_path: str | None = None):
         from apps.inference_worker.onnx_detector import OnnxPlateDetector
 
         try:
-            return OnnxPlateDetector(model_path or get_settings().detector_model_path)
+            settings = get_settings()
+            return OnnxPlateDetector(
+                model_path or settings.detector_model_path,
+                conf=settings.detector_min_confidence,
+            )
         except RuntimeError as exc:
             log.warning("onnx_detector_unavailable_using_contour", error=str(exc))
             return ContourPlateDetector()
