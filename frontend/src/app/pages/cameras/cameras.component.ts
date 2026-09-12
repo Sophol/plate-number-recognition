@@ -50,7 +50,7 @@ const EMPTY: CameraForm = { name: '', rtsp_url: '', site_id: '', direction: '', 
       <h2>Cameras</h2>
       <label class="inline">
         <input type="checkbox" [(ngModel)]="activeOnly" (change)="load()" />
-        active only
+        enabled only
       </label>
       <button class="ghost" (click)="load()">Refresh</button>
     </header>
@@ -79,7 +79,7 @@ const EMPTY: CameraForm = { name: '', rtsp_url: '', site_id: '', direction: '', 
           </select>
         </div>
         <label class="inline">
-          <input type="checkbox" name="active" [(ngModel)]="draft.is_active" /> active
+          <input type="checkbox" name="active" [(ngModel)]="draft.is_active" /> detection enabled
         </label>
         <button type="submit" [disabled]="busy() || !canSubmit(draft)">Add camera</button>
       </form>
@@ -89,7 +89,7 @@ const EMPTY: CameraForm = { name: '', rtsp_url: '', site_id: '', direction: '', 
 
     <table class="data">
       <thead>
-        <tr><th>Name</th><th>RTSP URL</th><th>Site</th><th>Direction</th><th>Active</th><th></th></tr>
+        <tr><th>Name</th><th>RTSP URL</th><th>Site</th><th>Direction</th><th>24/7 detection</th><th></th></tr>
       </thead>
       <tbody>
         @for (c of cameras(); track c.id) {
@@ -104,7 +104,7 @@ const EMPTY: CameraForm = { name: '', rtsp_url: '', site_id: '', direction: '', 
                   @for (d of directions; track d) { <option [value]="d">{{ d }}</option> }
                 </select>
               </td>
-              <td><label class="inline"><input type="checkbox" name="e-active" [(ngModel)]="form.is_active" /> active</label></td>
+              <td><label class="inline"><input type="checkbox" name="e-active" [(ngModel)]="form.is_active" /> enabled</label></td>
               <td class="actions">
                 <button (click)="save(c)" [disabled]="busy() || !canSubmit(form) || !dirty(c)">Save</button>
                 <button class="ghost" (click)="cancel()" [disabled]="busy()">Cancel</button>
@@ -132,15 +132,17 @@ const EMPTY: CameraForm = { name: '', rtsp_url: '', site_id: '', direction: '', 
                 @else { — }
               </td>
               <td>
-                <span class="tag" [class.ok]="c.is_active" [class.off]="!c.is_active">
-                  {{ c.is_active ? 'active' : 'inactive' }}
+                <span class="tag" [class.ok]="c.is_active" [class.off]="!c.is_active"
+                      [title]="c.is_active ? 'The server reads this camera around the clock.' : 'The server is not reading this camera.'">
+                  {{ c.is_active ? 'enabled' : 'disabled' }}
                 </span>
               </td>
               <td class="actions">
                 @if (auth.canEdit()) {
                   <button class="ghost" (click)="edit(c)" [disabled]="busy()">Edit</button>
-                  <button class="ghost" (click)="toggle(c)" [disabled]="busy()">
-                    {{ c.is_active ? 'Deactivate' : 'Activate' }}
+                  <button class="ghost" (click)="toggle(c)" [disabled]="busy()"
+                          [title]="c.is_active ? 'Stop 24/7 detection on this camera' : 'Start 24/7 detection on this camera'">
+                    {{ c.is_active ? 'Disable' : 'Enable' }}
                   </button>
                 }
               </td>
@@ -153,7 +155,8 @@ const EMPTY: CameraForm = { name: '', rtsp_url: '', site_id: '', direction: '', 
     </table>
     @if (auth.canEdit()) {
       <p class="muted small">
-        Changes to a camera's URL or active flag take effect when the pipeline service restarts.
+        Enable, disable, or change a camera's URL and the 24/7 detection service picks it up
+        within about 10 seconds. No restart needed.
       </p>
     }
   `,

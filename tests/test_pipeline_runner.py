@@ -105,16 +105,117 @@ async def test_one_bad_frame_does_not_kill_the_consumer():
     assert still_running
 
 
+class FakeCamera:
+    def __init__(self, id: str, name: str = "gate", rtsp_url: str = "rtsp://example/stream"):
+        self.id, self.name, self.rtsp_url = id, name, rtsp_url
+
+
+class FakeCaptures:
+    """Records which camera tasks the runner starts and stops, in place of run_camera."""
+
+    def __init__(self):
+        self.started: list[tuple[str, str]] = []
+        self.cancelled: list[str] = []
+
+    async def run_camera(self, camera_id, rtsp_url, *args, **kwargs):
+        self.started.append((camera_id, rtsp_url))
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            self.cancelled.append(camera_id)
+            raise
+
+
+async def never_ending_consume(queue, pipeline):
+    await asyncio.sleep(3600)
+
+
+def install(monkeypatch, runner, cameras_by_tick: list[list], captures: FakeCaptures,
+            consume=never_ending_consume):
+    """Each call to load_cameras returns the next entry; the last one repeats."""
+    ticks = {"n": 0}
+
+    async def load():
+        i = min(ticks["n"], len(cameras_by_tick) - 1)
+        ticks["n"] += 1
+        return cameras_by_tick[i]
+
+    monkeypatch.setattr(runner, "run_camera", captures.run_camera)
+    monkeypatch.setattr(runner, "consume", consume)
+    monkeypatch.setattr(runner, "build_pipeline", lambda *a, **k: object())
+    return load
+
+
+async def run_for(runner, load, ticks: int, reload_seconds: float = 0.02):
+    task = asyncio.create_task(runner.run(load_cameras=load, reload_seconds=reload_seconds))
+    await asyncio.sleep(reload_seconds * ticks + 0.05)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
 @pytest.mark.asyncio
-async def test_runner_exits_quietly_when_no_cameras_are_registered(monkeypatch):
-    """An empty camera table is configuration, not failure - it must not crash-loop."""
+async def test_runner_waits_when_no_cameras_are_registered_and_starts_one_when_it_appears(monkeypatch):
+    """An empty camera table is a waiting state: enabling a camera on the web
+    must start capture without a service restart."""
     from apps.pipeline_runner import main as runner
 
-    async def no_cameras():
-        return []
+    captures = FakeCaptures()
+    load = install(monkeypatch, runner, [[], [], [FakeCamera("cam-1")]], captures)
 
-    monkeypatch.setattr(runner, "load_active_cameras", no_cameras)
-    await runner.run()  # returns rather than raising
+    await run_for(runner, load, ticks=4)
+
+    assert captures.started == [("cam-1", "rtsp://example/stream")]
+
+
+@pytest.mark.asyncio
+async def test_disabling_a_camera_on_the_web_stops_its_capture(monkeypatch):
+    from apps.pipeline_runner import main as runner
+
+    captures = FakeCaptures()
+    load = install(monkeypatch, runner, [[FakeCamera("cam-1"), FakeCamera("cam-2")],
+                                         [FakeCamera("cam-2")]], captures)
+
+    await run_for(runner, load, ticks=3)
+
+    assert [c for c, _ in captures.started] == ["cam-1", "cam-2"]
+    assert captures.cancelled[0] == "cam-1"
+    # cam-2 only stops because the test cancels the runner at the end.
+    assert captures.cancelled.count("cam-2") == 1
+
+
+@pytest.mark.asyncio
+async def test_changing_a_camera_url_reconnects_it(monkeypatch):
+    from apps.pipeline_runner import main as runner
+
+    captures = FakeCaptures()
+    load = install(monkeypatch, runner, [[FakeCamera("cam-1", rtsp_url="rtsp://old/s")],
+                                         [FakeCamera("cam-1", rtsp_url="rtsp://new/s")]], captures)
+
+    await run_for(runner, load, ticks=3)
+
+    assert captures.started == [("cam-1", "rtsp://old/s"), ("cam-1", "rtsp://new/s")]
+
+
+@pytest.mark.asyncio
+async def test_a_database_blip_does_not_stop_running_captures(monkeypatch):
+    from apps.pipeline_runner import main as runner
+
+    captures = FakeCaptures()
+    calls = {"n": 0}
+
+    async def flaky_load():
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise ConnectionError("db went away")
+        return [FakeCamera("cam-1")]
+
+    install(monkeypatch, runner, [[]], captures)
+    await run_for(runner, flaky_load, ticks=4)
+
+    assert calls["n"] >= 3
+    assert captures.started == [("cam-1", "rtsp://example/stream")]
+    assert captures.cancelled == ["cam-1"]  # only the final shutdown
 
 
 @pytest.mark.asyncio
@@ -122,31 +223,14 @@ async def test_capture_is_cancelled_when_inference_dies(monkeypatch):
     """Capture filling a queue nobody drains is the exact failure to avoid."""
     from apps.pipeline_runner import main as runner
 
-    class FakeCamera:
-        id = "cam-1"
-        name = "gate"
-        rtsp_url = "rtsp://example/stream"
-
-    async def one_camera():
-        return [FakeCamera()]
-
-    capture_cancelled = asyncio.Event()
-
-    async def fake_run_camera(*args, **kwargs):
-        try:
-            await asyncio.sleep(60)
-        except asyncio.CancelledError:
-            capture_cancelled.set()
-            raise
+    captures = FakeCaptures()
 
     async def dying_consume(queue, pipeline):
+        await asyncio.sleep(0.01)
         raise RuntimeError("inference died")
 
-    monkeypatch.setattr(runner, "load_active_cameras", one_camera)
-    monkeypatch.setattr(runner, "run_camera", fake_run_camera)
-    monkeypatch.setattr(runner, "consume", dying_consume)
-    monkeypatch.setattr(runner, "build_pipeline", lambda *a, **k: object())
+    load = install(monkeypatch, runner, [[FakeCamera("cam-1")]], captures, consume=dying_consume)
 
-    await runner.run()
+    await asyncio.wait_for(runner.run(load_cameras=load, reload_seconds=5.0), timeout=2.0)
 
-    assert capture_cancelled.is_set()
+    assert captures.cancelled == ["cam-1"]

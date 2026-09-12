@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     # Bounded queue depth between camera and inference workers; oldest frame
     # is dropped when full so ingest never blocks on GPU backpressure.
     frame_queue_maxsize: int = 32
+    # How often the 24/7 runner re-reads the cameras table. Enabling or
+    # disabling a camera on the web console takes effect within this interval.
+    camera_reload_seconds: float = 10.0
 
     # "template" is the classical-CV fallback that ships by default; "paddle"
     # reads real plate typefaces but needs paddlepaddle + paddleocr installed.
