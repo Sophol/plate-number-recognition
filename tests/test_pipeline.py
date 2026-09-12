@@ -228,3 +228,45 @@ def test_pipeline_ignores_frames_with_no_detection():
     pipeline = make_pipeline()
     pipeline.detector = Empty()
     assert pipeline.process(frame_at(0)) == []
+
+
+# --- vanity plates ---------------------------------------------------------
+
+
+class ConfidenceDetector:
+    """StubDetector with a settable confidence, to drive the vanity threshold."""
+
+    def __init__(self, confidence: float):
+        self.confidence = confidence
+
+    def detect(self, image):
+        return [Detection(x1=200, y1=200, x2=440, y2=290, confidence=self.confidence)]
+
+
+def vanity_pipeline(detector_confidence: float, ocr_text: str) -> InferencePipeline:
+    return InferencePipeline(
+        detector=ConfidenceDetector(detector_confidence),
+        ocr=StubOCR(ocr_text),
+        province_classifier=StubProvince(),
+        model_version="test-v1",
+        votes_required=1,
+    )
+
+
+def test_unreadable_text_from_a_confident_detection_is_marked_vanity():
+    (read,) = vanity_pipeline(0.95, "KHMERNAME").process(frame_at(0))
+    assert read.plate_type == "vanity"
+    assert read.is_valid is False
+
+
+def test_unreadable_text_from_a_weak_detection_is_not_marked_vanity():
+    """A low-confidence box is more likely a misdetection than a VIP plate."""
+    (read,) = vanity_pipeline(0.4, "KHMERNAME").process(frame_at(0))
+    assert read.plate_type == "private_car"
+    assert read.is_valid is False
+
+
+def test_a_valid_plate_is_never_marked_vanity():
+    (read,) = vanity_pipeline(0.99, "2D-0888").process(frame_at(0))
+    assert read.plate_type == "private_car"
+    assert read.is_valid is True

@@ -120,6 +120,7 @@ async def persist(session: AsyncSession, read: CommittedRead) -> None:
                 "camera_id": str(read.camera_id),
                 "plate_text": read.plate_text,
                 "province_code": read.province_code,
+                "plate_type": read.plate_type,
                 "confidence": read.confidence,
                 "is_valid": read.is_valid,
                 "frame_ts": read.frame_ts.isoformat(),

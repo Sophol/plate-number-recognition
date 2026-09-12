@@ -11,6 +11,7 @@ from apps.inference_worker.perspective import split_zones, warp_plate
 from apps.inference_worker.province import PrefixProvinceClassifier
 from apps.inference_worker.tracker import IoUTracker
 from apps.inference_worker.voting import Candidate, TrackVoter, VoteResult
+from plate_types import VANITY
 
 log = structlog.get_logger()
 
@@ -49,12 +50,18 @@ class InferencePipeline:
         model_version: str,
         votes_required: int = 3,
         default_plate_type: str = "private_car",
+        # Above this detector confidence, an unparseable read is treated as a
+        # vanity plate rather than a failed one. Tune against the trained
+        # detector: the contour fallback reports a fill ratio, not a real
+        # probability, so this threshold means little until YOLO is in place.
+        vanity_min_detector_confidence: float = 0.8,
     ) -> None:
         self.detector = detector
         self.ocr = ocr
         self.province_classifier = province_classifier
         self.model_version = model_version
         self.default_plate_type = default_plate_type
+        self.vanity_min_detector_confidence = vanity_min_detector_confidence
         self.tracker = IoUTracker()
         self.voter = TrackVoter(votes_required=votes_required)
         self.prefix_province = PrefixProvinceClassifier()
@@ -80,6 +87,14 @@ class InferencePipeline:
             plate_type = detection.plate_type or self.default_plate_type
             corrected = validator.correct(reading.text, plate_type)
             is_valid = validator.validate(corrected, plate_type)
+
+            if not is_valid and detection.confidence >= self.vanity_min_detector_confidence:
+                # The detector is sure this is a plate, yet the text fits no
+                # known format. On a Cambodian gate that is usually a VIP vanity
+                # plate carrying a Khmer name instead of a number. It still must
+                # not open the gate, but it is a different problem from a dirty
+                # plate or a bad read, and the operator needs to see which.
+                plate_type = VANITY
 
             province = self._resolve_province(corrected, zones["bottom"])
 

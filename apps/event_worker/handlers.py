@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models import GateAction, GateEvent, ListType, Vehicle
+from plate_types import VANITY
 
 log = structlog.get_logger()
 
@@ -35,6 +36,14 @@ async def decide(session: AsyncSession, payload: dict) -> GateDecision:
         return GateDecision(GateAction.deny, "empty plate text", plate_text)
 
     if not is_valid:
+        # A vanity plate is still denied -- the gate only ever opens on an
+        # explicit whitelist match. The point of the separate reason is that an
+        # operator seeing it knows a real vehicle is waiting and can admit it by
+        # hand, instead of reading it as one more OCR failure and ignoring it.
+        if payload.get("plate_type") == VANITY:
+            return GateDecision(
+                GateAction.deny, "vanity plate - manual check required", plate_text
+            )
         return GateDecision(GateAction.deny, "plate failed format validation", plate_text)
 
     if confidence < MIN_GATE_CONFIDENCE:

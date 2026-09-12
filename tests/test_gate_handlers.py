@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from apps.event_worker.handlers import handle_plate_read
 from db.models import Base, GateAction, GateEvent, ListType, Vehicle
+from plate_types import VANITY
 
 
 @pytest_asyncio.fixture
@@ -95,3 +96,49 @@ async def test_every_decision_writes_a_gate_event(session):
     assert {e.action for e in events} == {GateAction.open, GateAction.deny}
     assert all(e.actor == "system:anpr" for e in events)
     assert all(e.reason for e in events)
+
+
+@pytest.mark.asyncio
+async def test_vanity_plate_denied_with_its_own_reason(session):
+    """A VIP vanity plate must not open the gate, but must not look like a bad read.
+
+    Fail-closed is deliberate: no format means no verified identity. The value of
+    the distinct reason is operational -- it tells whoever is watching that a real
+    vehicle is waiting for a manual decision.
+    """
+    decision = await handle_plate_read(
+        session,
+        payload(plate_text="កុល", is_valid=False, plate_type=VANITY),
+    )
+
+    assert decision.action is GateAction.deny
+    assert decision.reason == "vanity plate - manual check required"
+
+
+@pytest.mark.asyncio
+async def test_ordinary_invalid_plate_keeps_the_format_reason(session):
+    decision = await handle_plate_read(
+        session, payload(plate_text="XX!!", is_valid=False, plate_type="private_car")
+    )
+
+    assert decision.action is GateAction.deny
+    assert decision.reason == "plate failed format validation"
+
+
+@pytest.mark.asyncio
+async def test_vanity_plate_cannot_open_even_when_whitelisted(session):
+    """Registering the text of a vanity plate must not create a way in.
+
+    The plate text for these reads is whatever OCR made of Khmer script, so it is
+    neither stable nor unique; matching on it would admit anything that produced
+    the same garbage.
+    """
+    session.add(Vehicle(plate_text="កុល", list_type=ListType.whitelist))
+    await session.commit()
+
+    decision = await handle_plate_read(
+        session,
+        payload(plate_text="កុល", is_valid=False, plate_type=VANITY),
+    )
+
+    assert decision.action is GateAction.deny
