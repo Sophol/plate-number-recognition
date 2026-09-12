@@ -98,3 +98,85 @@ def is_valid(text: str) -> bool:
     """True only for a well-formed number whose check digit is correct."""
     parsed = parse(text)
     return parsed is not None and parsed.checksum_ok
+
+
+# --- known-container lookup ------------------------------------------------
+
+class KnownContainers:
+    """Container numbers the terminal has actually handled, from the PAS list.
+
+    A stronger check than the checksum. The check digit catches most misreads,
+    but a misread that happens to land on *another* valid number sails through
+    it; the odds of that number also being one the terminal has seen are tiny.
+    So a read that is both checksum-valid and known is trustworthy enough to act
+    on, and a checksum-valid read that is unknown is worth a second look.
+
+    Only checksum-valid entries are loaded: the PAS column carries a handful of
+    placeholders and typos that must not become a whitelist.
+    """
+
+    def __init__(self, numbers) -> None:
+        self._numbers = frozenset(normalise(n) for n in numbers)
+
+    @classmethod
+    def from_pas_json(cls, path) -> "KnownContainers":
+        import json
+        from pathlib import Path
+
+        data = json.loads(Path(path).read_text())
+        return cls(c["number"] for c in data["containers"] if c.get("checksum_ok"))
+
+    def __contains__(self, number: str) -> bool:
+        return normalise(number) in self._numbers
+
+    def __len__(self) -> int:
+        return len(self._numbers)
+
+
+def load_known(path) -> KnownContainers | None:
+    """The known-container set, or None when the PAS list has not been fetched.
+
+    None rather than an empty set, so callers can tell "no list available" from
+    "list available and this number is not in it" -- the two mean different
+    things at a gate.
+    """
+    from pathlib import Path
+
+    return KnownContainers.from_pas_json(path) if Path(path).exists() else None
+
+
+def snap_to_known(read: str, known: "KnownContainers") -> str | None:
+    """Correct an OCR read to the one known container within a single edit.
+
+    The list of numbers the terminal has handled works as a dictionary. An OCR
+    that drops, adds or swaps one character produces a string that is not a
+    container number, or is one that fails the checksum; if exactly one known
+    container is one substitution, insertion or deletion away, that is almost
+    certainly what was painted on the box.
+
+    Ambiguity returns None rather than a guess. It is rare: changing one serial
+    digit changes the check digit too, so two real containers are seldom within
+    one edit of each other -- the checksum is what makes this snap safe.
+    """
+    read = normalise(read)
+    if read in known:
+        return read
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+    candidates: set[str] = set()
+    n = len(read)
+    if n == 11:
+        for i in range(11):
+            for ch in alphabet:
+                if ch != read[i]:
+                    candidates.add(read[:i] + ch + read[i + 1:])
+    elif n == 10:
+        for i in range(11):
+            for ch in alphabet:
+                candidates.add(read[:i] + ch + read[i:])
+    elif n == 12:
+        for i in range(12):
+            candidates.add(read[:i] + read[i + 1:])
+    else:
+        return None
+    hits = [c for c in candidates if c in known]
+    return hits[0] if len(hits) == 1 else None
