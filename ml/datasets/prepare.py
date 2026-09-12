@@ -17,6 +17,7 @@ labels into dataset/v1/labels/ before running split.py.
 """
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
@@ -126,7 +127,19 @@ def main() -> None:
         kept = extract_video(video, frames_dir, args.min_difference, args.min_sharpness, args.every)
         print(f"{video.name}: kept {len(kept)} frames")
         records += kept
+
+    # The same photo often arrives twice under different names - re-exported by
+    # a phone, re-sent over chat. Left alone, split.py treats the copies as
+    # independent groups and can put one in train and its twin in test, which
+    # reports an accuracy the model has not earned. Exact duplicates carry no
+    # extra information, so they are dropped rather than relabelled.
+    seen: dict[str, str] = {}
     for image in expand(args.images, IMAGE_SUFFIXES):
+        digest = hashlib.sha1(image.read_bytes()).hexdigest()
+        if digest in seen:
+            print(f"{image.name}: duplicate of {seen[digest]}, skipped")
+            continue
+        seen[digest] = image.name
         records.append(copy_image(image, frames_dir))
         print(f"{image.name}: copied")
 
