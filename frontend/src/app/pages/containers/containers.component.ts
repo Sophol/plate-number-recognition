@@ -2,6 +2,7 @@ import { Component, inject, OnInit, signal } from '@angular/core';
 import { DatePipe, DecimalPipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ApiService } from '../../core/api.service';
+import { AuthService } from '../../core/auth.service';
 import { Camera, ContainerLookup, ContainerRead, ContainerReadQuery } from '../../core/models';
 import { errorText } from '../../core/error-text';
 
@@ -78,6 +79,7 @@ import { errorText } from '../../core/error-text';
     <table class="data">
       <thead>
         <tr>
+          <th>Evidence</th>
           <th>Container</th><th>Owner</th><th>Camera</th><th>Conf.</th>
           <th>Frame time</th><th>Model</th><th>Flags</th>
         </tr>
@@ -85,6 +87,13 @@ import { errorText } from '../../core/error-text';
       <tbody>
         @for (r of reads(); track r.id) {
           <tr>
+            <td class="evidence">
+              @if (r.crop_path) {
+                <a [href]="evidenceUrl(r, 'frame')" target="_blank" rel="noopener" title="Open the full frame">
+                  <img [src]="evidenceUrl(r, 'crop')" alt="crop of {{ r.container_number }}" loading="lazy" />
+                </a>
+              } @else { <span class="muted small">—</span> }
+            </td>
             <td class="mono strong">
               {{ r.container_number }}
               @if (r.was_snapped) {
@@ -110,17 +119,20 @@ import { errorText } from '../../core/error-text';
             </td>
           </tr>
         } @empty {
-          <tr><td colspan="7" class="muted">No container reads match these filters.</td></tr>
+          <tr><td colspan="8" class="muted">No container reads match these filters.</td></tr>
         }
       </tbody>
     </table>
   `,
   styles: [`
     .lookup-result { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+    .evidence img { height: 36px; max-width: 160px; object-fit: contain; border-radius: 3px;
+                    background: #111; display: block; }
   `],
 })
 export class ContainersComponent implements OnInit {
   private api = inject(ApiService);
+  private auth = inject(AuthService);
 
   reads = signal<ContainerRead[]>([]);
   cameras = signal<Camera[]>([]);
@@ -131,6 +143,10 @@ export class ContainersComponent implements OnInit {
   sinceLocal = '';
   untilLocal = '';
   q: ContainerReadQuery = { limit: 100, offset: 0 };
+
+  evidenceUrl(r: ContainerRead, which: 'crop' | 'frame'): string {
+    return this.api.containerEvidenceUrl(r.id, which, this.auth.token ?? '');
+  }
 
   ngOnInit(): void {
     this.api.listCameras().subscribe({ next: (c) => this.cameras.set(c), error: () => {} });

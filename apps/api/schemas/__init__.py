@@ -119,6 +119,8 @@ class ContainerReadOut(BaseModel):
     frame_ts: datetime
     model_version: str
     plate_read_id: uuid.UUID | None
+    crop_path: str | None = None
+    frame_path: str | None = None
     created_at: datetime
 
 

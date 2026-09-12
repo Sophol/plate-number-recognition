@@ -62,6 +62,10 @@ class Settings(BaseSettings):
     container_ocr_model_path: str = "models/container_ocr.onnx"
     container_known_list_path: str = "dataset/pas/containers.json"
     container_min_confidence: float = 0.5
+    # Where the crop + full frame of every committed container read are kept
+    # (see apps/inference_worker/capture.py). Empty disables capture. The API
+    # serves these files back for the console, so it needs the same setting.
+    container_capture_dir: str = ""
 
     # Vehicle type (car/truck/bus/motorcycle) and colour from a COCO-pretrained
     # YOLO via ONNX. "off" skips it. Colour is a heuristic and unreliable at a

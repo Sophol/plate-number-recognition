@@ -103,6 +103,8 @@ export interface ContainerRead {
   frame_ts: string;
   model_version: string;
   plate_read_id: string | null;
+  crop_path: string | null;
+  frame_path: string | null;
   created_at: string;
 }
 

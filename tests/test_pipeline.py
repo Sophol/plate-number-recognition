@@ -270,3 +270,52 @@ def test_a_valid_plate_is_never_marked_vanity():
     (read,) = vanity_pipeline(0.99, "2D-0888").process(frame_at(0))
     assert read.plate_type == "private_car"
     assert read.is_valid is True
+
+
+# --- container evidence -----------------------------------------------------
+
+
+def test_committed_container_carries_evidence_paths(tmp_path):
+    """With a capture store the committed read points at a saved crop and frame."""
+    from apps.inference_worker.capture import ContainerCapture
+    from apps.inference_worker.container import parse
+    from apps.inference_worker.container_locator import Region
+    from apps.inference_worker.container_ocr import ContainerReadResult
+    from apps.inference_worker.container_pipeline import ContainerDetection
+
+    class StubReader:
+        def read_frame(self, image, boxes=()):
+            n = parse("TCLU5437389")
+            return ContainerDetection(Region(100, 40, 400, 80, False),
+                                      ContainerReadResult("TCLU5437389", 0.9, n, True, False))
+
+    pipe = InferencePipeline(
+        detector=StubDetector(), ocr=StubOCR("2D-0888"), province_classifier=StubProvince(),
+        model_version="test-v1", container_reader=StubReader(), container_votes_required=1,
+        container_capture=ContainerCapture(tmp_path),
+    )
+    (read,) = pipe.process_containers(frame_at(0))
+    assert read.container_number == "TCLU5437389"
+    assert read.crop_path and (tmp_path / read.crop_path).is_file()
+    assert read.frame_path and (tmp_path / read.frame_path).is_file()
+    assert str(read.id)[:8] in read.crop_path
+
+
+def test_committed_container_without_capture_has_no_paths():
+    from apps.inference_worker.container import parse
+    from apps.inference_worker.container_locator import Region
+    from apps.inference_worker.container_ocr import ContainerReadResult
+    from apps.inference_worker.container_pipeline import ContainerDetection
+
+    class StubReader:
+        def read_frame(self, image, boxes=()):
+            n = parse("TCLU5437389")
+            return ContainerDetection(Region(0, 0, 10, 5, False),
+                                      ContainerReadResult("TCLU5437389", 0.9, n, None, False))
+
+    pipe = InferencePipeline(
+        detector=StubDetector(), ocr=StubOCR("2D-0888"), province_classifier=StubProvince(),
+        model_version="test-v1", container_reader=StubReader(), container_votes_required=1,
+    )
+    (read,) = pipe.process_containers(frame_at(0))
+    assert read.crop_path is None and read.frame_path is None

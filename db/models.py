@@ -145,6 +145,10 @@ class ContainerRead(Base):
     plate_read_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("plate_reads.id", ondelete="SET NULL"), nullable=True
     )
+    # Evidence, relative to container_capture_dir: the crop that was OCR'd and
+    # the whole frame. Null when capture was off at the time of the read.
+    crop_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    frame_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (

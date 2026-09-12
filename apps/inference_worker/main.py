@@ -89,6 +89,15 @@ def build_vehicle_detector(settings=None):
         return None
 
 
+def build_container_capture(settings=None):
+    """Crop + frame evidence for each committed container read, or None when unset."""
+    settings = settings or get_settings()
+    if not settings.container_capture_dir:
+        return None
+    from apps.inference_worker.capture import ContainerCapture
+    return ContainerCapture(settings.container_capture_dir)
+
+
 def build_container_reader(settings=None):
     """Locator + CRNN + PAS lookup, or None when disabled or the model is absent.
 
@@ -133,6 +142,7 @@ def build_pipeline(
         vehicle_detector=build_vehicle_detector(),
         container_reader=build_container_reader(),
         container_every_n_frames=get_settings().container_every_n_frames,
+        container_capture=build_container_capture(),
     )
 
 
@@ -206,10 +216,11 @@ async def consume(queue: BoundedFrameQueue, pipeline: InferencePipeline) -> None
                         owner_code=c.owner_code, checksum_ok=c.checksum_ok, is_known=c.is_known,
                         ocr_text=c.ocr_text, was_snapped=c.was_snapped, confidence=c.confidence,
                         frame_ts=c.frame_ts, model_version=c.model_version,
+                        crop_path=c.crop_path, frame_path=c.frame_path,
                     ))
                     log.info("container_committed", camera_id=c.camera_id,
                              container_number=c.container_number, is_known=c.is_known,
-                             confidence=round(c.confidence, 3))
+                             confidence=round(c.confidence, 3), crop=c.crop_path)
                 await session.commit()
             containers_committed.inc(len(containers))
 

@@ -51,6 +51,8 @@ class CommittedContainer:
     confidence: float
     frame_ts: datetime
     model_version: str
+    crop_path: str | None = None
+    frame_path: str | None = None
 
 
 class InferencePipeline:
@@ -77,6 +79,7 @@ class InferencePipeline:
         container_reader=None,
         container_votes_required: int = 2,
         container_every_n_frames: int = 1,
+        container_capture=None,
     ) -> None:
         self.detector = detector
         self.ocr = ocr
@@ -92,6 +95,8 @@ class InferencePipeline:
         self.container_voter = ContainerVoter(votes_required=container_votes_required)
         self.container_every_n_frames = max(1, container_every_n_frames)
         self._container_frame_counter = 0
+        # Saves crop + frame for each committed read; None keeps nothing.
+        self.container_capture = container_capture
 
     def process(self, frame: Frame) -> list[CommittedRead]:
         detections = self.detector.detect(frame.image)
@@ -166,9 +171,24 @@ class InferencePipeline:
         vote = self.container_voter.add(frame.camera_id, found.result, frame.frame_ts)
         if vote is None:
             return []
+        read_id = uuid.uuid4()
+        crop_path = frame_path = None
+        if self.container_capture is not None:
+            # The evidence is worth more than a dropped record is: a failed write
+            # is logged and the read still commits without paths.
+            try:
+                crop_path, frame_path = self.container_capture.save(
+                    frame.image, found.region, vote.number, read_id, frame.frame_ts,
+                    meta={"camera_id": frame.camera_id, "ocr_text": vote.ocr_text,
+                          "confidence": round(vote.confidence, 4), "is_known": vote.is_known,
+                          "was_snapped": vote.was_snapped,
+                          "vehicles": [[v.x1, v.y1, v.x2, v.y2, v.vehicle_type, v.colour] for v in vehicles]},
+                )
+            except Exception:
+                log.exception("container_capture_failed", container_number=vote.number)
         return [
             CommittedContainer(
-                id=uuid.uuid4(),
+                id=read_id,
                 camera_id=frame.camera_id,
                 container_number=vote.number,
                 owner_code=vote.number[:4],
@@ -179,6 +199,8 @@ class InferencePipeline:
                 confidence=vote.confidence,
                 frame_ts=frame.frame_ts,
                 model_version=self.model_version,
+                crop_path=crop_path,
+                frame_path=frame_path,
             )
         ]
 

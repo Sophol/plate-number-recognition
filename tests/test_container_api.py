@@ -119,3 +119,36 @@ async def test_lookup_reports_format_checksum_known_and_history(client):
 
     junk = (await client.get("/containers/HELLO", headers=h)).json()
     assert junk["well_formed"] is False and junk["checksum_ok"] is False and junk["owner_code"] is None
+
+
+@pytest.mark.asyncio
+async def test_evidence_endpoints(client, tmp_path, monkeypatch):
+    """Crop and frame are served by token-in-query, 404 when nothing was saved."""
+    from apps.inference_worker.capture import ContainerCapture
+
+    monkeypatch.setattr(containers_routes, "capture_store", lambda: ContainerCapture(tmp_path))
+    h = await token(client, "editor")
+    read = (await client.post("/container-reads", json=body(client, "MRSU2818883"), headers=h)).json()
+    read_id = read["id"]
+    tok = h["Authorization"].split()[1]
+
+    # No files yet: 404, not 500. No token: 401.
+    assert (await client.get(f"/container-reads/{read_id}/crop", params={"token": tok})).status_code == 404
+    assert (await client.get(f"/container-reads/{read_id}/crop")).status_code == 401
+
+    # Point the row at a file inside the store and it is served as JPEG.
+    (tmp_path / "d").mkdir()
+    (tmp_path / "d" / "c.jpg").write_bytes(b"\xff\xd8jpegbytes")
+    from db.models import ContainerRead
+    from sqlalchemy import update
+    override = app.dependency_overrides[get_session]
+    async for session in override():
+        await session.execute(update(ContainerRead).where(ContainerRead.id == uuid.UUID(read_id))
+                              .values(crop_path="d/c.jpg", frame_path="../outside.jpg"))
+        await session.commit()
+    resp = await client.get(f"/container-reads/{read_id}/crop", params={"token": tok})
+    assert resp.status_code == 200 and resp.headers["content-type"] == "image/jpeg"
+    assert resp.content == b"\xff\xd8jpegbytes"
+    # A path that escapes the store is refused even though the row has it.
+    assert (await client.get(f"/container-reads/{read_id}/frame", params={"token": tok})).status_code == 404
+    assert (await client.get(f"/container-reads/{uuid.uuid4()}/crop", params={"token": tok})).status_code == 404

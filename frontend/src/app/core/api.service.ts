@@ -127,4 +127,9 @@ export class ApiService {
   liveStreamUrl(cameraId: string, token: string): string {
     return `${API_BASE}/live/${cameraId}/stream?token=${encodeURIComponent(token)}`;
   }
+
+  /** Saved evidence for a container read (crop or full frame), same token-in-query rule. */
+  containerEvidenceUrl(readId: string, which: 'crop' | 'frame', token: string): string {
+    return `${API_BASE}/container-reads/${readId}/${which}?token=${encodeURIComponent(token)}`;
+  }
 }
