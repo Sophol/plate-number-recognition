@@ -4,7 +4,7 @@ import { HttpErrorResponse } from '@angular/common/http';
 export function errorText(err: unknown): string {
   if (!(err instanceof HttpErrorResponse)) return String(err);
   if (err.status === 0) {
-    return 'Cannot reach the API at localhost:8000. Is uvicorn running?';
+    return 'Cannot reach the API. Check that the server is running and you are online.';
   }
   const detail = err.error?.detail;
   if (typeof detail === 'string') return detail;

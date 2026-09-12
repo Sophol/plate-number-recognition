@@ -12,7 +12,7 @@ import { errorText } from '../../core/error-text';
     <div class="login-wrap">
       <form class="card login-card" (ngSubmit)="submit()">
         <h1>ANPR Test Console</h1>
-        <p class="muted">Sign in to the FastAPI backend at localhost:8000</p>
+        <p class="muted">Sign in to manage cameras, vehicles and plate reads</p>
 
         <label>Username</label>
         <input name="username" [(ngModel)]="username" autocomplete="username" required />
