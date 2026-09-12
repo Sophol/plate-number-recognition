@@ -1,0 +1,162 @@
+import asyncio
+
+import structlog
+from prometheus_client import Counter
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from apps.camera_worker.sampler import BoundedFrameQueue, Frame
+from apps.inference_worker.detector import ContourPlateDetector
+from apps.inference_worker.ocr import TemplateOCR
+from apps.inference_worker.pipeline import CommittedRead, InferencePipeline
+from apps.inference_worker.province import EnglishZoneProvinceClassifier
+from config import get_settings
+from db.models import Outbox, PlateRead
+from db.session import SessionLocal
+
+log = structlog.get_logger()
+
+reads_committed = Counter("anpr_reads_committed_total", "Plate reads committed after voting")
+frames_processed = Counter("anpr_frames_processed_total", "Frames run through inference")
+
+
+def build_ocr(backend: str = "template", use_gpu: bool = False):
+    """Pick an OCR backend by name.
+
+    "template" is the classical-CV fallback that needs no extra dependencies;
+    "paddle" reads real plate typefaces but requires paddlepaddle + paddleocr.
+    An unavailable paddle install falls back rather than taking the worker down,
+    because a degraded read is better than no pipeline at all.
+    """
+    if backend == "paddle":
+        from apps.inference_worker.paddle_ocr import PaddlePlateOCR
+
+        try:
+            return PaddlePlateOCR(use_gpu=use_gpu)
+        except RuntimeError as exc:
+            log.warning("paddle_unavailable_using_template", error=str(exc))
+            return TemplateOCR()
+    return TemplateOCR()
+
+
+def build_detector(backend: str = "contour"):
+    """Pick a plate locator by name.
+
+    "contour" needs no extra dependencies but finds bright rectangles rather
+    than plates; "paddle" runs PaddleOCR's text detector and keeps only
+    plate-shaped results. Falls back rather than taking the worker down.
+    """
+    if backend == "paddle":
+        from apps.inference_worker.paddle_detector import PaddlePlateDetector
+
+        try:
+            return PaddlePlateDetector()
+        except RuntimeError as exc:
+            log.warning("paddle_detector_unavailable_using_contour", error=str(exc))
+            return ContourPlateDetector()
+    return ContourPlateDetector()
+
+
+def build_pipeline(
+    model_version: str,
+    votes_required: int,
+    ocr_backend: str = "template",
+    ocr_use_gpu: bool = False,
+    detector_backend: str = "contour",
+) -> InferencePipeline:
+    """Wire the inference backends. Swap these for ONNX adapters once trained."""
+    ocr = build_ocr(ocr_backend, ocr_use_gpu)
+    return InferencePipeline(
+        detector=build_detector(detector_backend),
+        ocr=ocr,
+        # Province falls back to reading the Latin bottom zone, which the
+        # template matcher handles; keep it on that backend regardless.
+        province_classifier=EnglishZoneProvinceClassifier(TemplateOCR()),
+        model_version=model_version,
+        votes_required=votes_required,
+    )
+
+
+async def persist(session: AsyncSession, read: CommittedRead) -> None:
+    """Write the read and its outbox event in one transaction.
+
+    The outbox row is what makes publishing reliable: if the process dies after
+    commit, the relay still delivers it; if the commit fails, neither exists.
+    """
+    session.add(
+        PlateRead(
+            id=read.id,
+            camera_id=read.camera_id,
+            track_id=read.track_id,
+            plate_text=read.plate_text,
+            province_code=read.province_code,
+            plate_type=read.plate_type,
+            confidence=read.confidence,
+            detector_confidence=read.detector_confidence,
+            ocr_confidence=read.ocr_confidence,
+            province_confidence=read.province_confidence,
+            frame_ts=read.frame_ts,
+            model_version=read.model_version,
+            is_valid=read.is_valid,
+        )
+    )
+    session.add(
+        Outbox(
+            aggregate="plate_read",
+            payload={
+                "plate_read_id": str(read.id),
+                "camera_id": str(read.camera_id),
+                "plate_text": read.plate_text,
+                "province_code": read.province_code,
+                "confidence": read.confidence,
+                "is_valid": read.is_valid,
+                "frame_ts": read.frame_ts.isoformat(),
+            },
+        )
+    )
+
+
+async def consume(queue: BoundedFrameQueue, pipeline: InferencePipeline) -> None:
+    while True:
+        frame: Frame = await queue.get()
+        frames_processed.inc()
+
+        try:
+            committed = pipeline.process(frame)
+        except Exception:
+            log.exception("inference_failed", camera_id=frame.camera_id)
+            continue
+
+        if not committed:
+            continue
+
+        async with SessionLocal() as session:
+            for read in committed:
+                await persist(session, read)
+                log.info(
+                    "plate_committed",
+                    camera_id=read.camera_id,
+                    plate_text=read.plate_text,
+                    province_code=read.province_code,
+                    is_valid=read.is_valid,
+                )
+            await session.commit()
+        reads_committed.inc(len(committed))
+
+
+async def main() -> None:
+    settings = get_settings()
+    queue = BoundedFrameQueue(settings.frame_queue_maxsize)
+    pipeline = build_pipeline(
+        settings.model_version,
+        settings.votes_required,
+        ocr_backend=settings.ocr_backend,
+        ocr_use_gpu=settings.ocr_use_gpu,
+        detector_backend=settings.detector_backend,
+    )
+
+    log.info("inference_worker_started", model_version=settings.model_version)
+    await consume(queue, pipeline)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

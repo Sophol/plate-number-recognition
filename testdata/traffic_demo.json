@@ -1,0 +1,33 @@
+{
+  "scenario": "simple",
+  "fps": 10,
+  "size": [
+    960,
+    540
+  ],
+  "frames": 400,
+  "vehicles": [
+    {
+      "plate": "2D-0888",
+      "province": "KAMPONG",
+      "visible_frames": 73,
+      "first_frame": 34,
+      "last_frame": 106
+    },
+    {
+      "plate": "1A-4412",
+      "province": "PHNOMPENH",
+      "visible_frames": 73,
+      "first_frame": 104,
+      "last_frame": 176
+    },
+    {
+      "plate": "3C-9001",
+      "province": "SIEMREAP",
+      "visible_frames": 73,
+      "first_frame": 174,
+      "last_frame": 246
+    }
+  ],
+  "expected_tracks": 3
+}

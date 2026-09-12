@@ -1,0 +1,244 @@
+================================================================================
+CAMBODIA ANPR - HOW TO RUN THE PROJECT
+================================================================================
+
+Quick reference for getting this project running locally. For the design and
+rationale see anpr-plan.txt; for what is implemented vs. stubbed see README.md.
+
+All commands are run from the project root:
+  /Users/seaksophol/PycharmProjects/plate-number-count
+
+
+--------------------------------------------------------------------------------
+1. PREREQUISITES
+--------------------------------------------------------------------------------
+
+  * Python 3.13          - API, workers, tests (.venv here is 3.13.7)
+  * Python 3.12          - ONLY for the ML worker image; torch / paddleocr /
+                           onnxruntime-gpu wheels lag newer releases
+  * PostgreSQL 16 or 17  - via Docker, or the local PG17 on port 5433
+  * Docker Desktop       - optional, for postgres / rabbitmq / redis / minio
+
+Do NOT install requirements/gpu.txt into the 3.13 venv. opencv and av live
+there and need pkg-config + ffmpeg headers; the API does not need them.
+
+
+--------------------------------------------------------------------------------
+2. FIRST-TIME SETUP
+--------------------------------------------------------------------------------
+
+  # a) Virtualenv + dependencies
+  python3.13 -m venv .venv
+  .venv/bin/pip install -r requirements/dev.txt
+
+  # b) Environment file
+  cp .env.example .env
+  #    Then EDIT .env and replace JWT_SECRET. The default
+  #    "change-me-in-production" is a placeholder, never ship it.
+  #    Any value not set in .env falls back to the defaults in config.py.
+
+  # c) Database (choose ONE - see section 3)
+
+  # d) Schema
+  .venv/bin/alembic upgrade head
+
+  # e) First user (roles: viewer | list_editor | gate_operator | admin)
+  .venv/bin/python -m scripts.create_user admin "123456789" admin
+
+
+--------------------------------------------------------------------------------
+3. DATABASE - PICK ONE
+--------------------------------------------------------------------------------
+
+Option A - Docker (port 5432, matches .env.example)
+
+  docker compose -f docker/docker-compose.yml up -d postgres
+
+  Other services when you need them (event worker, object storage):
+  docker compose -f docker/docker-compose.yml up -d rabbitmq redis minio
+
+  RabbitMQ management UI : http://localhost:15672  (guest / guest)
+  MinIO console          : http://localhost:9001   (minioadmin / minioadmin)
+
+Option B - Local PostgreSQL 17 on port 5433 (what this machine uses)
+
+  Homebrew's postgresql@14 here is broken - it was built against icu4c 73,
+  which is no longer installed. PG17 was installed alongside it on port 5433
+  and the PG14 data directory was left untouched.
+
+  export PATH="/opt/homebrew/opt/postgresql@17/bin:$PATH"
+  pg_ctl -D /opt/homebrew/var/postgresql@17 -o "-p 5433" -l /tmp/pg17.log start
+
+  # stop it again with:
+  pg_ctl -D /opt/homebrew/var/postgresql@17 stop
+
+  The committed .env already points at 5433. The compose file still uses the
+  standard 5432 - if you switch between them, update DATABASE_URL and
+  DATABASE_URL_SYNC together. They must point at the same database: the async
+  URL is used at runtime, the sync one by Alembic.
+
+
+--------------------------------------------------------------------------------
+4. RUNNING THE SERVICES
+--------------------------------------------------------------------------------
+
+API (start here - it is the only piece that is useful on its own)
+
+  .venv/bin/uvicorn apps.api.main:app --reload
+
+  Swagger docs : http://localhost:8000/docs
+  Health       : http://localhost:8000/health
+  Metrics      : http://localhost:8000/metrics/
+                 NOTE the trailing slash. /metrics 307-redirects to /metrics/.
+  CORS is open to http://localhost:4200 only (see apps/api/main.py).
+
+  Auth flow: POST /auth/token with the user from step 2e, then send the
+  returned JWT as "Authorization: Bearer <token>". Role hierarchy is
+  viewer -> list_editor -> gate_operator -> admin.
+
+  /auth/token is an OAuth2 password flow, so the body must be form-encoded
+  (username/password), not JSON. A JSON body returns 422.
+
+Camera worker - RTSP capture, FPS thinning, motion/ROI gating
+
+  .venv/bin/python -m apps.camera_worker.main
+
+  Reads active cameras from the DB (cameras.is_active = true) and exits with
+  a "no_active_cameras" warning if there are none, so add a camera through
+  the API first. RTSPSource reconnects forever by design; pass max_reconnects
+  to make a finite source (a video file, a test) terminate instead of
+  spinning at end-of-stream.
+
+Testing tracking without a camera
+
+  Generate a clip with known ground truth, then score the pipeline against it:
+
+    .venv/bin/python -m scripts.make_test_video --scenario simple --out /tmp/traffic
+    .venv/bin/python -m scripts.score_tracking /tmp/traffic.mp4
+
+  Scenarios: simple (well separated), fast (speed vs the 0.3 IoU threshold),
+  crossing (two plates overlapping), hard (small, blurred, low contrast).
+  The generator writes <out>.json alongside the video listing every vehicle and
+  the frames it is visible in, so the scorer can report whether each transit
+  produced exactly one track id.
+
+  To watch it in the Angular live view instead, point a camera at the file:
+  the rtsp_url column accepts a local path.
+
+  Known result: simple/fast/hard give one track per vehicle; crossing gives two
+  ids per vehicle, because the contour detector merges overlapping plates into
+  one blob and then loses it for ~7 frames, exceeding the tracker's max_misses
+  of 5. tests/test_tracking_scenarios.py pins all of this.
+
+Inference worker - detect, warp, OCR, track, validate, vote, persist
+
+  .venv/bin/python -m apps.inference_worker.main
+
+  Needs opencv, so run it in a GPU/worker environment (requirements/gpu.txt
+  or the worker image), not the plain 3.13 API venv.
+
+Event worker - outbox relay + gate decisions
+
+  .venv/bin/python -m apps.event_worker.main
+
+  Requires RabbitMQ to be up. It runs the transactional outbox relay and the
+  gate-event consumer together; messages are requeued rather than acked on
+  failure so a transient DB error cannot silently drop a gate decision.
+
+Docker (API only; workers need the CUDA image)
+
+  docker compose -f docker/docker-compose.yml up -d --build api
+
+
+--------------------------------------------------------------------------------
+5. DEMO - FASTEST WAY TO SEE IT WORK END TO END
+--------------------------------------------------------------------------------
+
+  .venv/bin/python -m scripts.demo_pipeline
+
+Feeds synthetic frames through the real pipeline into Postgres and prints
+each stage: voting, persistence, outbox relay, and the gate decision. It uses
+a fake publisher, so RabbitMQ does not need to be running - but Postgres does,
+and migrations must already be applied.
+
+
+--------------------------------------------------------------------------------
+6. TESTS AND CHECKS
+--------------------------------------------------------------------------------
+
+  .venv/bin/pytest
+
+  # Include the PostgreSQL integration tests (skipped without this):
+  TEST_DATABASE_URL=postgresql+asyncpg://anpr:anpr@localhost:5433/anpr \
+    .venv/bin/pytest
+
+  .venv/bin/ruff check .
+  .venv/bin/mypy .
+
+Baseline is 84 tests, 81% coverage. The integration tests cover partitioning,
+JSONB, the trigram index, and the outbox relay - none of which SQLite can
+verify, so run them before trusting a DB-layer change. pytest.ini sets a 60s
+timeout because the camera-worker loops reconnect forever by design and a hung
+test should fail loudly rather than hang the suite.
+
+
+--------------------------------------------------------------------------------
+7. MIGRATIONS
+--------------------------------------------------------------------------------
+
+  .venv/bin/alembic upgrade head              # apply
+  .venv/bin/alembic downgrade -1              # roll back one
+  .venv/bin/alembic revision -m "description" # new migration
+
+Alembic uses DATABASE_URL_SYNC (psycopg2), not the async URL.
+
+plate_reads is partitioned by month on frame_ts with a DEFAULT partition, so
+inserts never fail. Provision partitions ahead of time in production:
+
+  CREATE TABLE plate_reads_2026_10 PARTITION OF plate_reads
+    FOR VALUES FROM ('2026-10-01') TO ('2026-11-01');
+
+Because the table is partitioned the primary key is (id, frame_ts), so
+session.get(PlateRead, id) does NOT work - query by id with a select().
+
+
+--------------------------------------------------------------------------------
+8. TROUBLESHOOTING
+--------------------------------------------------------------------------------
+
+Connection refused on 5432/5433
+  Postgres is not running, or .env points at the wrong port. Check which of
+  the two options in section 3 you are on and match both DATABASE_URL and
+  DATABASE_URL_SYNC to it.
+
+"no_active_cameras" and the camera worker exits
+  Expected. Add a camera via POST /cameras with is_active = true.
+
+Integration tests are skipped
+  TEST_DATABASE_URL is unset. See section 6.
+
+/metrics returns a 307
+  Use the trailing slash: /metrics/.
+
+pip fails building av or opencv
+  You are installing requirements/gpu.txt outside the worker image. Use
+  requirements/dev.txt for the API and tests.
+
+Homebrew postgresql@14 will not start
+  Known broken on this machine (icu4c 73 missing). Use PG17 on 5433 or Docker;
+  do not try to repair the 14 install, its data directory is being preserved.
+
+
+--------------------------------------------------------------------------------
+9. BEFORE YOU TRUST THE OUTPUT
+--------------------------------------------------------------------------------
+
+The three ML models are NOT trained. Detection, OCR, and province
+classification currently run on classical-CV fallbacks that genuinely execute
+but are far less accurate than trained models. Everything above will run and
+produce plate reads - those reads are for pipeline development, not for
+recognition accuracy, and must not drive a real gate. All ML training, eval,
+and export scripts under ml/ raise NotImplementedError; each depends on the
+labeled dataset from Phase 0.
+
+See the "Before production" section of README.md for the full blocking list.

@@ -1,0 +1,669 @@
+CAMBODIAN LICENSE PLATE RECOGNITION (ANPR) — PYTHON PLAN
+
+============================================================
+Stack: Python 3.11/3.12 + PostgreSQL | Cameras: IP/CCTV via RTSP
+
+WHY A CUSTOM PIPELINE
+Cambodian plates contain Khmer province name (top), Latin/digits (middle),
+and English province name (bottom).
+Common layouts include Type 1 / Type 2 for private vehicles.
+Generic ANPR APIs may recognize the Latin/digit line but can be unreliable
+for Khmer province recognition and Cambodian plate-type classification.
+A Cambodian-specific pipeline allows dedicated detection, province
+classification, OCR, validation, and frame voting.
+RECOGNITION PIPELINE
+
+Step 1. Plate detection
+- YOLOv8/YOLOv11 segmentation fine-tuned on Cambodian plates.
+- Detects plate location and optionally plate type
+(Type 1 / Type 2 / government / NGO / commercial etc.).
+
+Step 2. Perspective correction
+- Use segmentation mask to determine plate corners.
+- Apply OpenCV homography/perspective warp.
+- Normalize the plate before OCR.
+
+Step 3. Text zone split
+- Crop top zone: Khmer province name.
+- Crop middle zone: Latin letters + digits.
+- Crop bottom zone: English province name.
+
+Step 4. Character/province recognition
+- Middle zone: PaddleOCR for Latin letters and digits.
+- Top zone: use a small image classifier for Cambodian provinces
+instead of relying on Khmer OCR.
+- Bottom zone: optional English OCR as a cross-check.
+
+Step 5. Cross-frame tracking
+- Track each detected plate/vehicle across consecutive frames
+(IoU tracker or ByteTrack keyed off the YOLO detections) before
+voting, so votes are only taken across frames confirmed to be
+the same physical vehicle.
+- Assign a track_id per vehicle transit; close the track after a
+gap timeout or when the vehicle leaves the ROI.
+- This also gives natural dedup/cooldown boundaries per vehicle.
+
+Step 6. Validation & voting
+- Validate plate format with regex and position rules, selected by
+plate-type (see RECOGNITION VALIDATION).
+- Province classifier should agree with English OCR when available.
+- Vote across 3-5 consecutive frames within the same track_id before
+committing a result.
+- Store confidence scores for detector, OCR, and province classifier.
+
+Step 7. Model export
+- Export trained models to ONNX.
+- Production inference can use ONNX Runtime GPU or TensorRT.
+- Python is used for training, inference, API, and workers.
+
+DATASET
+Target 1,000-2,000+ labeled images from YOUR OWN cameras.
+Prefer collecting CCTV video first and extracting representative frames.
+Cover:
+Day / night
+Rain
+Headlight glare
+Dirty/damaged plates
+Motorcycles
+Cars
+Trucks
+Different distances
+Different viewing angles
+Different plate types
+Include all Cambodian provinces.
+Use Label Studio or Roboflow for annotation.
+Labeling QA: route a sample of each annotator's work (or all of it,
+early on) through a second reviewer/consensus pass. Province and
+plate-type labels are easy to get systematically wrong from a single
+annotator, which silently caps end-to-end accuracy. Track inter-
+annotator agreement and re-review low-agreement classes.
+Keep dataset versions:
+dataset/v1
+dataset/v2
+dataset/v3
+Maintain a dataset manifest and completely separate held-out test set.
+Avoid putting near-identical frames from the same video into both
+training and test sets.
+SYSTEM ARCHITECTURE
+
+[RTSP Camera] -> [Python Camera Worker]
+|
+v
+[Frame Sampling]
+|
+v
+[Motion + ROI]
+|
+v
+[Python ML Worker]
+|
++------+-------+------+
+| | |
+YOLO Seg. PaddleOCR |
+| | |
+Perspective Latin OCR |
+Warp | |
+| | |
++-------+-------+ |
+| |
+Province Classifier |
+| |
++-------+-------+
+|
+[Tracking: ByteTrack/IoU]
+|
+[Validation]
+|
+[Frame Voting]
+|
+v
+[PostgreSQL] -(outbox row)-> [Outbox Relay] -> [RabbitMQ/Redis]
+|                                                    |
++----------+----------+                             v
+| |                                          [Gate/Alerts]
+v v
+[FastAPI]                                    (see event_worker)
+|
+v
+[Angular]
+
+Layer Recommendation
+
+Video ingest OpenCV + FFmpeg/PyAV for RTSP
+Frame sampling 5-10 FPS depending on camera and vehicle speed
+Motion gating OpenCV frame difference + lane/ROI filtering
+Detection Ultralytics YOLO segmentation
+Inference PyTorch during development; ONNX Runtime GPU /
+TensorRT for production
+Perspective OpenCV
+Middle OCR PaddleOCR
+Province MobileNetV3 / EfficientNet / ResNet classifier
+Tracking ByteTrack or IoU tracker, keyed off YOLO detections,
+to bound frame-voting and dedup to one vehicle
+Backpressure Bounded queue between camera worker and inference
+worker; drop-oldest-frame policy under GPU overload
+so ingest never blocks
+Clock sync NTP on all camera hosts/edge devices; frame_ts must
+be comparable across cameras for tracking and gate timing
+API FastAPI (with auth — see SECURITY)
+Database PostgreSQL + SQLAlchemy/asyncpg
+Migrations Alembic
+Messaging RabbitMQ or Redis Streams
+Storage MinIO / S3 for plate crops
+Realtime FastAPI WebSocket / WebSocket
+Dashboard Angular + Tailwind
+Logging Python logging / structlog
+Monitoring Prometheus + Grafana
+Deployment Docker + NVIDIA Container Toolkit
+
+POSTGRESQL - CORE TABLES
+
+cameras
+id
+name
+rtsp_url
+site_id
+direction
+is_active
+
+plate_reads
+id
+camera_id
+plate_text
+province_code
+plate_type
+confidence
+detector_confidence
+ocr_confidence
+province_confidence
+frame_ts
+image_path
+plate_crop_path
+vehicle_type
+model_version
+is_valid
+is_verified
+created_at
+
+vehicles
+id
+plate_text
+owner_name
+phone
+list_type
+notes
+
+gate_events
+id
+plate_read_id
+action
+actor
+created_at
+
+outbox
+id
+aggregate
+payload
+processed_at
+created_at
+
+provinces
+code
+name_km
+name_en
+
+Indexes:
+plate_reads(plate_text)
+plate_reads(camera_id, frame_ts)
+GIN (plate_text gin_trgm_ops)
+vehicles(plate_text) UNIQUE
+
+Partition:
+plate_reads by month using frame_ts.
+
+PYTHON PROJECT STRUCTURE
+
+cambodia-anpr/
+|
++-- apps/
+| +-- api/
+| | +-- main.py
+| | +-- routes/
+| | +-- schemas/
+| | +-- services/
+| |
+| +-- camera_worker/
+| | +-- main.py
+| | +-- rtsp.py
+| | +-- motion.py
+| | +-- sampler.py
+| |
+| +-- inference_worker/
+| | +-- main.py
+| | +-- detector.py
+| | +-- perspective.py
+| | +-- ocr.py
+| | +-- province.py
+| | +-- tracker.py
+| | +-- validator.py
+| | +-- voting.py
+| |
+| +-- event_worker/
+| +-- main.py
+| +-- outbox_relay.py
+| +-- rabbitmq.py
+| +-- handlers.py
+|
++-- ml/
+| +-- detection/
+| | +-- train.py
+| | +-- evaluate.py
+| | +-- export.py
+| |
+| +-- province/
+| | +-- train.py
+| | +-- evaluate.py
+| | +-- export.py
+| |
+| +-- datasets/
+| +-- prepare.py
+| +-- split.py
+|
++-- models/
+| +-- plate_detector.onnx
+| +-- province_classifier.onnx
+|
++-- db/
+| +-- models.py
+| +-- repositories/
+| +-- migrations/
+|
++-- tests/
+|
++-- docker/
+| +-- Dockerfile.api
+| +-- Dockerfile.worker
+| +-- docker-compose.yml
+|
++-- requirements/
+| +-- base.txt
+| +-- gpu.txt
+| +-- dev.txt
+|
++-- README.md
+
+HARDWARE
+
+Central server:
+- NVIDIA GPU
+- 16-32 GB RAM
+- NVMe SSD
+- Gigabit/10GbE networking
+
+Possible GPUs:
+- NVIDIA T4
+- NVIDIA L4
+- RTX 4060 or better
+
+Edge:
+- NVIDIA Jetson Orin Nano
+- NVIDIA Jetson Orin NX
+
+Camera:
+- 1080p minimum
+- Mount at <=30 degrees to plate direction where possible
+- IR illumination for night
+- Fast shutter for moving vehicles
+- Correct exposure and focus
+
+Camera positioning remains one of the most important factors in ANPR
+accuracy.
+
+Clock sync:
+- All camera hosts, edge devices, and the central server must run
+NTP and stay synced to the same time source.
+- frame_ts is used for cross-camera tracking, gate event ordering,
+and monthly partitioning; clock drift silently corrupts all three.
+
+PERFORMANCE STRATEGY
+Sample cameras at approximately 5-10 FPS.
+Use lane/ROI filtering before expensive inference.
+Use motion detection to avoid processing completely static scenes.
+Use tracking/frame voting to reduce duplicate recognition.
+Batch inference when appropriate for multi-camera servers.
+Use a bounded frame queue between camera worker and inference worker;
+under GPU overload, drop the oldest queued frame rather than blocking
+the camera worker or dropping the newest frame.
+Benchmark:
+PyTorch
+ONNX Runtime GPU
+TensorRT
+before selecting the production runtime.
+RECOGNITION VALIDATION
+
+Plate format is selected by the plate-type classifier output from
+Step 1 (detection). Do not apply one regex to every plate.
+
+Type              Example      Regex
+----------------- ------------ --------------------------------
+Private car       2D-0888      ^[1-9][A-Z]{1,2}-\d{4}$
+Motorcycle        1KH-2233     ^[1-9][A-Z]{2}-\d{4}$  (verify against
+                                actual motorcycle plate samples)
+Government        (TBD)        Define after collecting samples;
+                                often has distinct prefix/color
+Commercial        (TBD)        Define after collecting samples
+NGO                (TBD)       Define after collecting samples
+Diplomatic/other  (TBD)        Define after collecting samples
+
+Treat every "(TBD)" regex as a Phase 0/1 deliverable: collect at
+least a handful of real samples per plate type before writing the
+rule, rather than guessing the format up front.
+
+Adjust validation rules for:
+- Government plates
+- Commercial plates
+- NGO plates
+- Motorcycle plates
+- Other special Cambodian plate formats
+
+Use position-aware character correction for common OCR errors:
+
+O <-> 0
+I <-> 1
+B <-> 8
+
+
+Do not blindly replace characters; apply corrections according to the
+expected character position.
+
+Example:
+
+Frame 101 -> 2D-0888
+Frame 102 -> 2D-0888
+Frame 103 -> 2D-088B
+Frame 104 -> 2D-0888
+Frame 105 -> 2D-0888
+
+
+Final result:
+
+2D-0888
+
+IMPORTANT METRICS
+
+Measure the complete pipeline, not only detector mAP.
+
+Detection:
+- Precision
+- Recall
+- mAP50
+- mAP50-95
+
+OCR:
+- Character accuracy
+- Full plate exact-match accuracy
+
+Province:
+- Province classification accuracy
+- Confusion matrix
+
+End-to-end:
+- Correct plate
+- Correct province
+- Correct plate type
+
+Primary production KPI:
+
+Full plate exact-match accuracy.
+
+PHASED ROLLOUT
+
+Phase 0 — Week 1-2
+- Install 1-2 cameras.
+- Record RTSP video.
+- Extract representative frames.
+- Start labeling.
+- Build dataset v1.
+
+Phase 1 — Week 3-5
+- Train YOLO plate detector.
+- Train province classifier.
+- Integrate PaddleOCR.
+- Implement perspective correction.
+- Implement validation and frame voting.
+- Evaluate using held-out test data.
+- Export models to ONNX.
+
+Phase 2 — Week 6-8
+- Build Python camera workers.
+- Build inference workers.
+- Build FastAPI backend.
+- Build PostgreSQL database.
+- Add MinIO/S3 storage.
+- Add RabbitMQ/Redis.
+- Build basic Angular dashboard.
+- Run system in shadow mode.
+
+Phase 3 — Week 9-10
+- Integrate gate controller.
+- Implement whitelist/blacklist.
+- Add alerts.
+- Add authentication + role-based permissions on FastAPI and Angular
+(see SECURITY).
+- Add audit logging for all whitelist/blacklist and gate-override
+actions, not just gate_events.actor.
+- Enable production workflow.
+
+Phase 4 — Ongoing
+- Collect misreads.
+- Human-verify difficult cases.
+- Add hard examples to dataset.
+- Retrain models.
+- Evaluate new models before deployment using the model promotion
+process (see MODEL PROMOTION).
+- Track model versions and production accuracy.
+
+MODEL PROMOTION
+
+A new model version must not go straight to controlling gates.
+
+1. Train and evaluate offline against the held-out test set.
+   Require it to beat the current production model on the primary
+   KPI (full plate exact-match accuracy) before proceeding.
+2. Shadow-score: run the candidate model_version alongside the
+   production model on the same live frames for a defined window
+   (e.g. 1-2 weeks or N thousand reads), writing candidate results
+   to plate_reads without acting on them (no gate/alert triggers).
+3. Compare candidate vs. production accuracy on the same frames,
+   including per-province and per-plate-type breakdowns, not just
+   the aggregate.
+4. Promote by flipping which model_version the inference worker
+   acts on; keep the previous version's weights and code path
+   available for immediate rollback.
+5. Define an explicit rollback trigger (e.g. exact-match accuracy
+   drop of more than X% over Y reads) and who is authorized to
+   pull the trigger.
+
+SECURITY
+
+Because this system can trigger physical gate actions and stores
+per-vehicle tracking data, treat it as security-sensitive, not just
+another internal dashboard.
+
+- Authentication required on FastAPI for all non-public routes;
+  no anonymous access to plate_reads, vehicles, or gate control.
+- Role-based authorization: separate roles for read-only viewers,
+  list (whitelist/blacklist) editors, and gate-override operators.
+  Editing vehicles/list_type should require a higher privilege than
+  viewing plate_reads.
+- Audit every whitelist/blacklist edit and every manual gate action
+  with actor, timestamp, and reason — gate_events.actor is a start,
+  but list edits need the same treatment (consider a generic
+  audit_log table rather than overloading gate_events).
+- Rate-limit and authenticate any externally reachable API surface;
+  RTSP credentials and camera network should stay on an isolated
+  VLAN, not exposed alongside the public-facing API.
+- Encrypt plate_reads/vehicles data at rest if required by local
+  data protection rules, and restrict MinIO/S3 bucket access to
+  backend services only (no public bucket policies).
+
+KEY PYTHON PACKAGES
+
+ML:
+ultralytics
+torch
+torchvision
+paddleocr
+onnxruntime-gpu
+
+Tracking:
+supervision (or bytetracker/lap for ByteTrack)
+
+Computer vision:
+opencv-python
+numpy
+av
+
+Backend:
+fastapi
+uvicorn
+pydantic
+python-jose / authlib (auth)
+passlib (password hashing, if using local accounts)
+
+Database:
+sqlalchemy
+asyncpg
+alembic
+
+Messaging:
+aio-pika
+redis
+
+Storage:
+boto3 / minio
+
+Testing:
+pytest
+
+Monitoring:
+prometheus-client
+structlog
+
+Deployment:
+Docker
+NVIDIA Container Toolkit
+
+RISKS & MITIGATIONS
+
+Night glare / dirty plates
+-> IR camera, correct exposure, image preprocessing, retraining.
+
+Motorbike plates
+-> Separate class/detector strategy, higher sampling rate on
+motorcycle lanes.
+
+Similar characters
+-> Position-aware validation + temporal frame voting.
+
+Khmer recognition
+-> Province image classifier instead of primary Khmer OCR.
+
+Different plate layouts
+-> Plate-type classification + layout-specific processing.
+
+Camera angle
+-> Correct installation and perspective correction.
+
+Model drift
+-> Continuously collect production misreads and retrain.
+
+Network/RTSP failure
+-> Automatic reconnect and local buffering.
+
+GPU overload
+-> ROI filtering, motion gating, tracking, optimized ONNX/TensorRT
+inference, bounded drop-oldest frame queue between camera and
+inference workers.
+
+Duplicate reads
+-> Tracking (ByteTrack/IoU) + temporal grouping + cooldown per
+vehicle, keyed off track_id rather than time window alone.
+
+Clock drift across cameras
+-> NTP on all camera/edge hosts; alert if a camera's reported
+frame_ts skews from server time beyond a threshold.
+
+Unauthorized gate/list access
+-> Authentication + role-based permissions on all API routes,
+audit logging on every list edit and gate override.
+
+Bad model promoted to production
+-> Shadow-score new model_version against production on live
+traffic before cutover; defined rollback trigger and process.
+
+RECOMMENDED FINAL STACK
+
+Python 3.12
+PyTorch
+Ultralytics YOLO
+PaddleOCR
+OpenCV
+ONNX Runtime GPU / TensorRT
+FastAPI
+PostgreSQL
+SQLAlchemy
+Alembic
+RabbitMQ or Redis
+MinIO
+Docker
+NVIDIA CUDA
+Angular + Tailwind
+Prometheus + Grafana
+
+FINAL ARCHITECTURE
+
+RTSP Cameras
+|
+v
+Python Camera Workers
+|
+v
+Motion + ROI
+|
+v
+YOLO Segmentation
+|
+v
+Perspective Correction
+|
++------------------+------------------+
+| | |
+v v v
+Province Classifier PaddleOCR Optional English OCR
+| | |
++------------------+------------------+
+|
+v
+Tracking (ByteTrack/IoU)
+|
+v
+Validation + Voting
+|
+v
+PostgreSQL --(outbox row)--> Outbox Relay --> RabbitMQ/Redis
+|                                                    |
++---------+---------+                                v
+| |                                            Gate/Alerts
+v v
+FastAPI (auth + RBAC)
+|
+v
+Angular
+
+Python handles the complete ML and backend pipeline, while PostgreSQL,
+RabbitMQ/Redis, MinIO, Docker, and Angular provide the supporting
+production infrastructure. Tracking bounds frame voting/dedup to a
+single vehicle transit, the outbox relay decouples the DB write from
+message publishing, and the API enforces authentication/authorization
+in front of both the dashboard and gate-control actions.

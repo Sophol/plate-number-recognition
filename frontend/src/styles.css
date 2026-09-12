@@ -1,0 +1,117 @@
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --border: #d9dde3;
+  --text: #1c2128;
+  --muted: #6b7480;
+  --accent: #2c6bed;
+  --ok-bg: #dcf5e4; --ok-fg: #1a6b38;
+  --warn-bg: #fdf0d0; --warn-fg: #8a5d00;
+  --bad-bg: #fadcdc; --bad-fg: #97231f;
+  --off-bg: #e6e9ee; --off-fg: #5b6470;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.content { padding: 20px; max-width: 1400px; margin: 0 auto; }
+
+/* --- top bar --- */
+.topbar {
+  display: flex; align-items: center; gap: 16px;
+  padding: 0 20px; height: 52px;
+  background: var(--surface); border-bottom: 1px solid var(--border);
+}
+.topbar .brand { font-weight: 700; letter-spacing: 0.04em; }
+.topbar a {
+  color: var(--muted); text-decoration: none; padding: 4px 0;
+  border-bottom: 2px solid transparent;
+}
+.topbar a.active { color: var(--text); border-bottom-color: var(--accent); }
+.topbar .spacer { flex: 1; }
+.topbar .who { color: var(--muted); display: flex; align-items: center; gap: 6px; }
+
+/* --- page head --- */
+.page-head { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+.page-head h2 { margin: 0; font-size: 18px; flex-shrink: 0; }
+
+/* --- cards + forms --- */
+.card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; padding: 14px; margin-bottom: 16px;
+}
+.row-form { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+.row-form .grow { flex: 1; min-width: 200px; }
+label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+label.inline {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 14px; color: var(--text); margin: 0;
+}
+input, select {
+  padding: 7px 9px; border: 1px solid var(--border); border-radius: 6px;
+  background: #fff; color: var(--text); font: inherit; min-width: 0; width: 100%;
+}
+input.narrow { width: 90px; }
+label.inline input { width: auto; }
+input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+button {
+  padding: 7px 14px; border-radius: 6px; border: 1px solid transparent;
+  background: var(--accent); color: #fff; font: inherit; cursor: pointer;
+}
+button:disabled { opacity: 0.55; cursor: not-allowed; }
+button.ghost { background: transparent; color: var(--text); border-color: var(--border); }
+button.ghost:hover:not(:disabled) { background: var(--bg); }
+button.ghost.danger { color: var(--bad-fg); border-color: var(--bad-fg); }
+
+details summary { cursor: pointer; color: var(--muted); margin-bottom: 10px; }
+
+/* --- tables --- */
+table.data {
+  width: 100%; border-collapse: collapse;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+}
+table.data th, table.data td {
+  text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+table.data th {
+  font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--muted); font-weight: 600;
+}
+table.data tr:last-child td { border-bottom: none; }
+table.data td.actions { text-align: right; white-space: nowrap; }
+table.data td.actions button { margin-left: 6px; }
+table.data td select { width: auto; }
+
+/* --- bits --- */
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+.strong { font-weight: 600; }
+.small { font-size: 12px; }
+.muted { color: var(--muted); }
+
+.tag {
+  display: inline-block; padding: 1px 7px; border-radius: 10px;
+  font-size: 11px; font-weight: 600; background: var(--off-bg); color: var(--off-fg);
+  margin-left: 4px;
+}
+.tag.ok { background: var(--ok-bg); color: var(--ok-fg); }
+.tag.warn { background: var(--warn-bg); color: var(--warn-fg); }
+.tag.bad { background: var(--bad-bg); color: var(--bad-fg); }
+.tag.role { background: #e2ebfd; color: #234a9c; }
+
+.alert { padding: 10px 12px; border-radius: 6px; margin-bottom: 14px; }
+.alert.error { background: var(--bad-bg); color: var(--bad-fg); }
+.alert.info { background: var(--off-bg); color: var(--off-fg); }
+
+@media (max-width: 700px) {
+  .content { padding: 12px; }
+  .row-form > div { flex: 1 1 100%; }
+  table.data { display: block; overflow-x: auto; }
+}

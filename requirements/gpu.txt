@@ -1,0 +1,13 @@
+-r base.txt
+
+# Camera/inference workers only. PyAV needs pkg-config + ffmpeg headers when no
+# wheel exists for the running Python version.
+opencv-python-headless==4.10.0.84
+av==13.1.0
+
+torch==2.5.1
+torchvision==0.20.1
+ultralytics==8.3.55
+paddleocr==2.9.1
+onnxruntime-gpu==1.20.1
+supervision==0.25.1

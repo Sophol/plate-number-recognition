@@ -1,0 +1,55 @@
+.camera-tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+.camera-tabs button.selected {
+  border-color: var(--accent); color: var(--accent); font-weight: 600;
+}
+
+.live-grid {
+  display: grid; gap: 16px;
+  grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr);
+  align-items: start;
+}
+
+.viewer { padding: 10px; }
+.stream {
+  display: block; width: 100%; border-radius: 6px; background: #16181d;
+  aspect-ratio: 16 / 9; object-fit: contain;
+}
+.stream-fallback {
+  display: grid; place-content: center; text-align: center; gap: 6px;
+  aspect-ratio: 16 / 9; background: #16181d; border-radius: 6px;
+  color: #aab2be; padding: 24px;
+}
+.stream-fallback code { color: #e5c07b; }
+.legend { margin: 8px 2px 0; }
+
+.reads h3 { margin: 0 0 10px; font-size: 15px; }
+.read { padding: 12px; }
+.read-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.read-head .plate { font-size: 17px; font-weight: 700; letter-spacing: 0.04em; }
+.spacer-left { margin-left: auto; }
+
+.stages { list-style: none; margin: 0; padding: 0; display: grid; gap: 7px; }
+.stages li {
+  display: grid; align-items: center; gap: 8px;
+  grid-template-columns: 84px 90px 52px 1fr;
+}
+.stage-name { font-size: 12px; font-weight: 600; color: var(--muted); }
+.meter { height: 7px; border-radius: 4px; background: var(--off-bg); overflow: hidden; }
+.meter i { display: block; height: 100%; border-radius: 4px; background: var(--off-fg); }
+.meter i.ok { background: #2fa35e; }
+.meter i.warn { background: #d08700; }
+.meter i.bad { background: #d0342c; }
+.meter i.flat { width: 100%; background: var(--off-fg); }
+
+.footnote { margin: 10px 0 0; padding-top: 8px; border-top: 1px solid var(--border); }
+
+@media (max-width: 1000px) {
+  .live-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 560px) {
+  .stages li { grid-template-columns: 76px 60px 46px; }
+  .stages li .muted.small { grid-column: 1 / -1; margin-left: 76px; }
+}
+.stream-fallback .reason {
+  color: #f0a8a4; font-size: 14px; margin: 0; max-width: 46ch;
+}

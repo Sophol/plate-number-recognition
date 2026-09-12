@@ -1,0 +1,124 @@
+<header class="page-head">
+  <h2>Live</h2>
+  @if (selected()) {
+    <span class="tag" [class.ok]="connected()" [class.off]="!connected()">
+      {{ connected() ? 'streaming' : 'not streaming' }}
+    </span>
+    @if (connected()) {
+      <span class="muted small">{{ fps() | number: '1.1-1' }} fps preview</span>
+    } @else if (detail()) {
+      <span class="muted small">{{ detail() }}</span>
+    }
+  }
+</header>
+
+@if (error()) { <div class="alert error">{{ error() }}</div> }
+
+@if (cameras().length === 0) {
+  <div class="alert info">
+    No active cameras. Add one on the Cameras page, or activate an existing one.
+  </div>
+}
+
+<div class="camera-tabs">
+  @for (c of cameras(); track c.id) {
+    <button class="ghost" [class.selected]="selected()?.id === c.id" (click)="select(c)">
+      {{ label(c) }}
+    </button>
+  }
+</div>
+
+<div class="live-grid">
+  <section class="viewer card">
+    @if (streamUrl() && !streamFailed()) {
+      <img class="stream" [src]="streamUrl()" alt="live camera preview"
+           (error)="onStreamError()" />
+    } @else if (streamFailed()) {
+      <div class="stream-fallback">
+        <strong>Stream unavailable</strong>
+        @if (detail()) { <p class="reason">{{ detail() }}</p> }
+        <p class="muted small">
+          <code>{{ selected()?.rtsp_url }}</code>
+        </p>
+      </div>
+    } @else {
+      <div class="stream-fallback muted">Select a camera.</div>
+    }
+    <p class="muted small legend">
+      Box colour is OCR confidence — green ≥ 0.80, amber ≥ 0.50, red below.
+      The thin amber quad is the four-corner region used for perspective correction.
+    </p>
+  </section>
+
+  <section class="reads">
+    <h3>How each plate was read</h3>
+    @if (events().length === 0) {
+      <p class="muted small">
+        No plates detected yet. Every detection appears here with the confidence
+        reported at each stage of the pipeline.
+      </p>
+    }
+
+    @for (e of events(); track e.at) {
+      <article class="card read">
+        <div class="read-head">
+          <span class="plate mono">{{ e.corrected_text || '??' }}</span>
+          <span class="tag" [class]="barClass(overall(e))">{{ overall(e) | number: '1.2-2' }}</span>
+          @if (e.is_valid) {
+            <span class="tag ok">valid format</span>
+          } @else {
+            <span class="tag bad">invalid format</span>
+          }
+          <span class="muted small spacer-left">{{ e.at | date: 'HH:mm:ss' }}</span>
+        </div>
+
+        <ol class="stages">
+          <li>
+            <span class="stage-name">1 · Detect</span>
+            <span class="meter"><i [class]="barClass(e.detector_confidence)"
+                                   [style.width.%]="e.detector_confidence * 100"></i></span>
+            <span class="mono small">{{ e.detector_confidence | number: '1.2-2' }}</span>
+            <span class="muted small">plate located in frame</span>
+          </li>
+          <li>
+            <span class="stage-name">2 · Warp</span>
+            <span class="meter"><i class="flat" [class.ok]="e.warped"></i></span>
+            <span class="mono small">{{ e.warped ? 'yes' : 'skipped' }}</span>
+            <span class="muted small">
+              {{ e.warped ? 'four corners rectified to a flat plate' : 'box-only crop, resized' }}
+            </span>
+          </li>
+          <li>
+            <span class="stage-name">3 · OCR</span>
+            <span class="meter"><i [class]="barClass(e.ocr_confidence)"
+                                   [style.width.%]="e.ocr_confidence * 100"></i></span>
+            <span class="mono small">{{ e.ocr_confidence | number: '1.2-2' }}</span>
+            <span class="muted small">middle zone read as <b class="mono">{{ e.ocr_text || '—' }}</b></span>
+          </li>
+          @if (e.ocr_text !== e.corrected_text) {
+            <li>
+              <span class="stage-name">4 · Correct</span>
+              <span class="meter"><i class="flat ok" style="width:100%"></i></span>
+              <span class="mono small">{{ e.corrected_text }}</span>
+              <span class="muted small">confusable characters fixed for {{ e.plate_type }}</span>
+            </li>
+          }
+          <li>
+            <span class="stage-name">5 · Province</span>
+            <span class="meter"><i [class]="barClass(e.province_confidence ?? 0)"
+                                   [style.width.%]="(e.province_confidence ?? 0) * 100"></i></span>
+            <span class="mono small">{{ e.province_code ?? '—' }}</span>
+            <span class="muted small">
+              {{ e.province_code ? 'from plate prefix or bottom zone' : 'not resolved' }}
+            </span>
+          </li>
+        </ol>
+
+        <p class="muted small footnote">
+          The committed read takes the lower of detect and OCR as its confidence,
+          and is only written after the same text wins a vote across frames.
+        </p>
+      </article>
+    }
+  </section>
+</div>
