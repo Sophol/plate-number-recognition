@@ -23,11 +23,11 @@ from apps.api.live.devicesource import DeviceSource, parse_device
 from apps.api.live.filesource import LoopingFileSource
 from apps.api.live.probe import probe
 from apps.camera_worker.rtsp import RTSPSource
-from apps.inference_worker.detector import ContourPlateDetector
-from apps.inference_worker.ocr import TemplateOCR
+from apps.inference_worker.main import build_detector, build_ocr
 from apps.inference_worker.perspective import split_zones, warp_plate
 from apps.inference_worker.province import EnglishZoneProvinceClassifier
 from apps.inference_worker.validator import correct, validate
+from config import get_settings
 
 log = structlog.get_logger()
 
@@ -92,8 +92,14 @@ class PreviewSession:
         self._detail = "starting"
         self._attempts = 0
 
-        self._detector = ContourPlateDetector()
-        self._ocr = TemplateOCR()
+        # Build the same backends the inference worker uses, so the preview
+        # shows what the deployed pipeline actually sees -- not the classical-CV
+        # fallback. A preview drawing no box while the trained detector fires on
+        # every frame is worse than no preview: it reads as "detection is
+        # broken" when it is working.
+        settings = get_settings()
+        self._detector = build_detector(settings.detector_backend, settings.detector_model_path)
+        self._ocr = build_ocr(settings.ocr_backend, settings.ocr_use_gpu)
         self._province = EnglishZoneProvinceClassifier(self._ocr)
 
     # --- viewer bookkeeping -------------------------------------------------
