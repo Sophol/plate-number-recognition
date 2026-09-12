@@ -135,7 +135,13 @@ async def consume(queue: BoundedFrameQueue, pipeline: InferencePipeline) -> None
         frames_processed.inc()
 
         try:
-            committed = pipeline.process(frame)
+            # pipeline.process is synchronous and CPU-bound -- a 640px ONNX
+            # detection costs ~100ms on a CPU box. Running it inline would block
+            # the event loop for that long, which in the combined runner means
+            # RTSP sockets stop being drained and frames pile up in the kernel
+            # buffer. onnxruntime and OpenCV release the GIL, so a worker thread
+            # genuinely overlaps inference with capture.
+            committed = await asyncio.to_thread(pipeline.process, frame)
         except Exception:
             log.exception("inference_failed", camera_id=frame.camera_id)
             continue
