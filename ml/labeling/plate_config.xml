@@ -1,0 +1,65 @@
+<!--
+  Labelling interface for Cambodian plates. One pass over a frame produces the
+  labels for all three models: the box trains the detector, the transcription
+  trains OCR, and the province choice trains the classifier.
+
+  Every attribute is perRegion, because a frame can hold several plates and an
+  image-level answer would silently attach the first plate's text to all of them.
+
+  Import with:  python -m ml.labeling.import_tasks --dataset dataset/v1
+  Export with:  python -m ml.labeling.export_labels --export export.json --dataset dataset/v1
+-->
+<View>
+  <Image name="image" value="$image" zoom="true" zoomControl="true" rotateControl="false"/>
+
+  <Header value="1. Draw a tight box around each plate"/>
+  <RectangleLabels name="plate" toName="image">
+    <Label value="plate" background="#00d4aa"/>
+  </RectangleLabels>
+
+  <Header value="2. For each box, fill in the details"/>
+  <TextArea name="plate_text" toName="image" perRegion="true" required="false"
+            placeholder="2D-0888" editable="true" maxSubmissions="1"
+            rows="1" showSubmitButton="false"/>
+
+  <Choices name="plate_type" toName="image" perRegion="true" required="false"
+           showInLine="false">
+    <Choice value="private_car"/>
+    <Choice value="motorcycle"/>
+    <Choice value="government"/>
+    <Choice value="commercial"/>
+    <Choice value="ngo"/>
+    <Choice value="diplomatic"/>
+    <Choice value="unreadable"/>
+  </Choices>
+
+  <Choices name="province" toName="image" perRegion="true" required="false"
+           showInLine="false">
+      <Choice value="1" alias="BANTEAY MEANCHEY"/>
+      <Choice value="2" alias="BATTAMBANG"/>
+      <Choice value="3" alias="KAMPONG CHAM"/>
+      <Choice value="4" alias="KAMPONG CHHNANG"/>
+      <Choice value="5" alias="KAMPONG SPEU"/>
+      <Choice value="6" alias="KAMPONG THOM"/>
+      <Choice value="7" alias="KAMPOT"/>
+      <Choice value="8" alias="KANDAL"/>
+      <Choice value="9" alias="KOH KONG"/>
+      <Choice value="10" alias="KRATIE"/>
+      <Choice value="11" alias="MONDULKIRI"/>
+      <Choice value="12" alias="PHNOM PENH"/>
+      <Choice value="13" alias="PREAH VIHEAR"/>
+      <Choice value="14" alias="PREY VENG"/>
+      <Choice value="15" alias="PURSAT"/>
+      <Choice value="16" alias="RATANAKIRI"/>
+      <Choice value="17" alias="SIEM REAP"/>
+      <Choice value="18" alias="PREAH SIHANOUK"/>
+      <Choice value="19" alias="STUNG TRENG"/>
+      <Choice value="20" alias="SVAY RIENG"/>
+      <Choice value="21" alias="TAKEO"/>
+      <Choice value="22" alias="ODDAR MEANCHEY"/>
+      <Choice value="23" alias="KEP"/>
+      <Choice value="24" alias="PAILIN"/>
+      <Choice value="25" alias="TBOUNG KHMUM"/>
+      <Choice value="unknown" alias="NOT VISIBLE"/>
+  </Choices>
+</View>

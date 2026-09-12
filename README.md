@@ -28,8 +28,10 @@ Implemented and tested:
   gate decisions that fail closed
 - Prometheus counters across camera and inference workers
 
-Still stubbed (`NotImplementedError`): all ML training/eval/export scripts and
-dataset prep — every one depends on a labeled dataset.
+Dataset prep and the detection train/evaluate/export scripts are implemented and
+run on Apple-silicon MPS — see [Training](#training). They still need the labeled
+dataset from Phase 0 to produce anything useful. Province and OCR training remain
+stubbed (`NotImplementedError`).
 
 ### The ML fallbacks — read before trusting them
 
@@ -76,6 +78,8 @@ writes a `gate_events` row with its reason.
   `onnxruntime-gpu` wheels lag newer releases
 - `opencv` and `av` live in `requirements/gpu.txt`, not `base.txt`, so the API
   installs without needing `pkg-config` and ffmpeg headers
+- Training on an Apple-silicon Mac uses `requirements/mac-ml.txt` on Python
+  3.13 — see [Training](#training)
 
 ## Setup
 
@@ -127,6 +131,118 @@ TEST_DATABASE_URL=postgresql+asyncpg://anpr:anpr@localhost:5433/anpr .venv/bin/p
 
 84 tests, 81% coverage. The integration tests cover partitioning, JSONB, the
 trigram index, and the outbox relay — none of which SQLite can verify.
+
+## Training
+
+The detection model trains on an Apple-silicon Mac via MPS. The server never
+needs torch: training produces an ONNX file, and the inference worker loads it
+with `onnxruntime` on CPU. Verified on an M1 Pro (16 GB) — YOLO11n at 640 px
+exports to ONNX and runs at ~13 FPS on that machine's CPU, so the same file on a
+4-vCPU server lands in the 3–6 FPS range, enough for a barrier gate but not for
+high-speed multi-camera capture.
+
+```bash
+python3.13 -m venv .venv-ml
+.venv-ml/bin/pip install -r requirements/mac-ml.txt
+.venv-ml/bin/python -c "import torch; print(torch.backends.mps.is_available())"  # True
+```
+
+Do not install `requirements/gpu.txt` on a Mac — `onnxruntime-gpu` and the
+pinned CUDA `torch` have no macOS wheels. The Mac's torch version does not need
+to match the server's, because only the ONNX crosses between them.
+
+### The pipeline
+
+```bash
+# 1. Frames out of recorded RTSP video, deduplicated and deblurred
+.venv-ml/bin/python -m ml.datasets.prepare --videos recordings/ --out dataset/v1
+
+# 2. Label them in Label Studio, then export back to dataset/v1/labels/
+#    (see Labelling below)
+
+# 3. Group-aware split — frames from one video never straddle train and test
+.venv-ml/bin/python -m ml.datasets.split --dataset dataset/v1
+
+# 4. Train (device is auto-detected: MPS, else CUDA, else CPU)
+.venv-ml/bin/python -m ml.detection.train --data dataset/v1/yolo/data.yaml
+
+# 5. Held-out metrics, then ONNX with a parity check against the torch model
+.venv-ml/bin/python -m ml.detection.evaluate --weights runs/detect/plate/weights/best.pt \
+    --data dataset/v1/yolo/data.yaml
+.venv-ml/bin/python -m ml.detection.export --weights runs/detect/plate/weights/best.pt
+```
+
+Step 5 writes `models/plate_detector.onnx`, which `config.detector_model_path`
+already points at. `scp` it to the server and implement the `Detector` protocol
+against it; no orchestration changes.
+
+`split.py` refuses to run with fewer than three groups, because a dataset that
+cannot hold out a separate val and test set cannot produce an honest number.
+`export.py` refuses to write a model whose ONNX output drifts more than 1e-3
+(relative) from torch — a mismatched opset produces a model that loads, runs,
+and quietly returns worse boxes.
+
+Expect 1–3 hours for 100 epochs of YOLO11n on a few thousand images on an M1
+Pro. Keep `--batch` at 16 or below: MPS shares the 16 GB with the system.
+
+### Labelling
+
+Label Studio runs locally in its own venv — it pulls Django and would collide
+with the ML venv.
+
+```bash
+python3.13 -m venv .venv-label
+.venv-label/bin/pip install label-studio
+
+.venv-ml/bin/python -m ml.labeling.import_tasks --dataset dataset/v1
+
+LOCAL_FILES_SERVING_ENABLED=true \
+LOCAL_FILES_DOCUMENT_ROOT=$PWD/dataset \
+  .venv-label/bin/label-studio start --port 8081
+```
+
+Then at <http://localhost:8081>: sign up, create a project, paste
+`ml/labeling/plate_config.xml` into Labeling Interface → Code, and import
+`dataset/v1/label_studio_tasks.json`.
+
+Frames are referenced by path, not uploaded — `LOCAL_FILES_DOCUMENT_ROOT` must
+contain them or every task renders a broken image. Serving is authenticated, so
+a signed-out request for a frame returns 401; that is the server working, not a
+misconfiguration.
+
+One pass per frame produces the labels for all three models: the box trains the
+detector, the transcription trains OCR, the province choice trains the
+classifier. Every attribute is per-region, because a frame with two plates would
+otherwise attach the first plate's text to both.
+
+Export from Label Studio in **JSON** format (not JSON-MIN — it drops the
+per-region attributes), then:
+
+```bash
+.venv-ml/bin/python -m ml.labeling.export_labels --export export.json --dataset dataset/v1
+```
+
+That writes `dataset/v1/labels/*.txt` for the detector and
+`dataset/v1/plates.jsonl` (text, province, plate type per box) for OCR and
+province training. Label Studio's own YOLO export is not used: it keeps the
+boxes and discards the attributes, which is the whole point of labelling once.
+
+A frame whose annotation was cancelled becomes an empty label file — a real
+"no plates here" sample. A task nobody opened is skipped entirely, so an
+unlabelled backlog never teaches the detector that plates are absent.
+
+Per the plan, route a sample of each annotator's work through a second reviewer.
+Province and plate-type are the labels a single annotator gets systematically
+wrong, and that error caps end-to-end accuracy no matter how long the detector
+trains.
+
+### Still stubbed
+
+`ml/province/` and OCR training remain `NotImplementedError`. They need label
+types the detection dataset does not carry — per-crop province codes and
+per-character transcriptions — so they are blocked on Phase 0 labelling rather
+than on tooling. PaddleOCR has no MPS backend and fine-tunes on CPU only, which
+is the one step worth renting a GPU box for.
 
 ## Partitions
 

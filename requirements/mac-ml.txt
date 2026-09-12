@@ -1,0 +1,18 @@
+# Training on an Apple-silicon Mac. Deliberately not gpu.txt: onnxruntime-gpu and
+# the pinned CUDA torch have no macOS wheels, and the Mac never serves traffic -
+# it produces the ONNX that the CPU server loads, so the torch version here does
+# not need to match the server's.
+#
+#   python3.13 -m venv .venv-ml
+#   .venv-ml/bin/pip install -r requirements/mac-ml.txt
+#   .venv-ml/bin/python -c "import torch; print(torch.backends.mps.is_available())"
+
+torch>=2.5
+torchvision>=0.20
+ultralytics>=8.3
+
+onnx>=1.17
+onnxruntime>=1.20
+
+opencv-python-headless>=4.10
+numpy>=2.2
