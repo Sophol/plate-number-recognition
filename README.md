@@ -9,10 +9,20 @@ The full pipeline runs end to end: camera → detect → warp → OCR → track 
 validate → vote → Postgres → outbox → gate decision. Verified against real
 PostgreSQL 17. Run `python -m scripts.demo_pipeline` to see it work.
 
-**The three ML models are not trained.** They sit behind protocols in
-`apps/inference_worker/interfaces.py`, currently backed by classical-CV
-fallbacks that genuinely run but are far less accurate than trained models.
-Training needs the labeled dataset from Phase 0.
+**The detector is trained; OCR and the province classifier are not.** All three
+sit behind protocols in `apps/inference_worker/interfaces.py`. `OnnxPlateDetector`
+runs a real YOLO11n model; the other two still fall back to classical CV.
+
+The detector was trained on a public CC BY 4.0 dataset of parking-barrier CCTV
+(8,823 images, Vietnamese plates) — the deployment scenario matches even though
+the plate format does not. On its held-out test split: precision 0.987, recall
+0.973, mAP50 0.981, mAP50-95 0.707. On five real Cambodian photos it found 5/5
+plates at mean IoU 0.765, which is what makes it worth shipping before any
+Cambodian training data exists.
+
+It is a starting point, not the finished model. Fine-tune it on frames from your
+own camera — its angle, mounting height and night lighting are what decide
+accuracy at a specific gate.
 
 Implemented and tested:
 
@@ -28,18 +38,22 @@ Implemented and tested:
   gate decisions that fail closed
 - Prometheus counters across camera and inference workers
 
-Dataset prep and the detection train/evaluate/export scripts are implemented and
-run on Apple-silicon MPS — see [Training](#training). They still need the labeled
-dataset from Phase 0 to produce anything useful. Province and OCR training remain
-stubbed (`NotImplementedError`).
+Dataset prep, labelling, and the detection and province training scripts are
+implemented and run on Apple-silicon MPS — see [Training](#training). Only OCR
+training remains stubbed (`NotImplementedError`); it needs the per-character
+transcriptions that Phase 0 labelling produces.
 
-### The ML fallbacks — read before trusting them
+### What each model actually is — read before trusting them
 
-| Interface | Production plan | Current fallback | Gap |
+| Interface | Production plan | Ships with | Gap |
 | --- | --- | --- | --- |
-| `Detector` | YOLOv8/11 segmentation | Contour + morphology | Misses angled, dirty, night plates |
+| `Detector` | YOLOv8/11 segmentation | **Trained YOLO11n via ONNX** | Box-only, so no corners for perspective correction; not yet tuned to your camera |
 | `OCR` | PaddleOCR | Hershey-font template match | Font mismatch; weak on real plates |
 | `ProvinceClassifier` | CNN on Khmer top zone | Fuzzy-match English bottom zone | **Inverts the plan's design** |
+
+`ContourPlateDetector` remains the default (`detector_backend="contour"`) and the
+fallback when no model file is present. Set `detector_backend="onnx"` to use the
+trained one.
 
 That last row matters most. The plan deliberately classifies the *Khmer* zone
 because Khmer OCR is unreliable — no classical-CV substitute can read Khmer, so
@@ -70,6 +84,15 @@ noise, too high misses distant vehicles.
 match with `is_valid=True` and confidence ≥ 0.75. Unregistered, blacklisted,
 low-confidence, and format-invalid reads are all denied, and every decision
 writes a `gate_events` row with its reason.
+
+Vanity plates — where a Khmer name replaces the number, in practice a handful of
+VIP vehicles — are denied too, but with their own reason: `vanity plate - manual
+check required`. No readable format means no verified identity, so the barrier
+stays shut; the separate reason exists so an operator can tell a real vehicle
+waiting for a manual decision from a muddy plate or a bad read. Registering the
+OCR output of a Khmer name as a whitelisted vehicle will not open it either, and
+a test enforces that: such text is neither stable nor unique, so matching on it
+would admit anything producing the same garbage.
 
 ## Python versions
 
@@ -185,6 +208,32 @@ and quietly returns worse boxes.
 Expect 1–3 hours for 100 epochs of YOLO11n on a few thousand images on an M1
 Pro. Keep `--batch` at 16 or below: MPS shares the 16 GB with the system.
 
+### Deploying a trained detector
+
+```bash
+scp models/plate_detector.onnx root@<server>:/opt/anpr/models/
+
+# on the server - onnxruntime only, no torch and no ultralytics (~300 MB)
+python3 -m venv /opt/anpr/venv
+/opt/anpr/venv/bin/pip install onnxruntime numpy opencv-python-headless structlog
+```
+
+Then set in the server's `.env`:
+
+```
+DETECTOR_BACKEND=onnx
+DETECTOR_MODEL_PATH=/opt/anpr/models/plate_detector.onnx
+```
+
+Verified on a 4-vCPU x86_64 box: **117 ms/frame, 8.5 FPS**, producing boxes
+identical to the arm64 Mac that trained it, down to the pixel. Enough for a
+barrier gate where a car pauses; not enough for vehicles at speed or several
+cameras at once.
+
+A missing model file logs `onnx_detector_unavailable_using_contour` and silently
+falls back to the classical-CV locator. Alert on that line — the gate keeps
+running at much worse accuracy and nothing else says so.
+
 ### Labelling
 
 Label Studio runs locally in its own venv — it pulls Django and would collide
@@ -236,13 +285,32 @@ Province and plate-type are the labels a single annotator gets systematically
 wrong, and that error caps end-to-end accuracy no matter how long the detector
 trains.
 
+### Province classifier
+
+```bash
+.venv-ml/bin/python -m ml.province.crops --dataset dataset/v1
+.venv-ml/bin/python -m ml.province.train --crops dataset/v1/province
+.venv-ml/bin/python -m ml.province.evaluate --weights runs/province/best.pt --crops dataset/v1/province
+.venv-ml/bin/python -m ml.province.export --weights runs/province/best.pt
+```
+
+Implemented but untrained — it needs per-crop province labels, which only
+labelling produces. Crops are cut with the pipeline's own `warp_plate` and
+`split_zones` so the model trains on exactly what inference shows it.
+
+`export.py` writes `province_classes.json` beside the model. The ONNX emits a
+bare index; without that file the server has to guess the class order, and a
+wrong guess relabels every read with a plausible neighbour instead of failing.
+
+Read the confusion matrix, not the accuracy. Province classes are badly
+imbalanced in any real plate population, so one number hides two provinces whose
+Khmer words look alike being swapped for each other.
+
 ### Still stubbed
 
-`ml/province/` and OCR training remain `NotImplementedError`. They need label
-types the detection dataset does not carry — per-crop province codes and
-per-character transcriptions — so they are blocked on Phase 0 labelling rather
-than on tooling. PaddleOCR has no MPS backend and fine-tunes on CPU only, which
-is the one step worth renting a GPU box for.
+OCR training. It needs per-character transcriptions, so it is blocked on Phase 0
+labelling rather than on tooling. PaddleOCR has no MPS backend and fine-tunes on
+CPU only, which is the one step worth renting a GPU box for.
 
 ## Partitions
 
@@ -260,10 +328,11 @@ Because the table is partitioned, the primary key is `(id, frame_ts)`, so
 
 ## Before production
 
-**Blocking — do not run gates on the current fallbacks.** The classical-CV
-detector and OCR are for pipeline development, not recognition accuracy. Train
-the real models first (Phase 0/1) and measure full-plate exact-match accuracy
-against a held-out test set, as the plan specifies.
+**Blocking — do not run gates on the current OCR.** The detector is trained and
+measured; the template OCR is not, and full-plate exact-match accuracy is the
+plan's primary KPI. A gate cannot be trusted on a plate nothing has verifiably
+read. Train OCR on Cambodian plates and measure it against a held-out test set
+before any barrier moves.
 
 Also required:
 
