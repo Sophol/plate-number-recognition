@@ -76,6 +76,7 @@ class InferencePipeline:
         vehicle_detector=None,
         container_reader=None,
         container_votes_required: int = 2,
+        container_every_n_frames: int = 1,
     ) -> None:
         self.detector = detector
         self.ocr = ocr
@@ -89,6 +90,8 @@ class InferencePipeline:
         self.vehicle_detector = vehicle_detector
         self.container_reader = container_reader
         self.container_voter = ContainerVoter(votes_required=container_votes_required)
+        self.container_every_n_frames = max(1, container_every_n_frames)
+        self._container_frame_counter = 0
 
     def process(self, frame: Frame) -> list[CommittedRead]:
         detections = self.detector.detect(frame.image)
@@ -150,6 +153,9 @@ class InferencePipeline:
         plate voting exists to absorb.
         """
         if self.container_reader is None:
+            return []
+        self._container_frame_counter += 1
+        if self._container_frame_counter % self.container_every_n_frames:
             return []
         vehicles = self.vehicle_detector.detect(frame.image) if self.vehicle_detector else []
         found = self.container_reader.read_frame(

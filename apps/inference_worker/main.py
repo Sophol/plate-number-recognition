@@ -59,6 +59,7 @@ def build_detector(backend: str = "contour", model_path: str | None = None):
             return OnnxPlateDetector(
                 model_path or settings.detector_model_path,
                 conf=settings.detector_min_confidence,
+                threads=settings.ort_intra_op_threads,
             )
         except RuntimeError as exc:
             log.warning("onnx_detector_unavailable_using_contour", error=str(exc))
@@ -82,7 +83,7 @@ def build_vehicle_detector(settings=None):
     from apps.inference_worker.vehicle import OnnxVehicleDetector
 
     try:
-        return OnnxVehicleDetector(settings.vehicle_model_path)
+        return OnnxVehicleDetector(settings.vehicle_model_path, threads=settings.ort_intra_op_threads)
     except RuntimeError as exc:
         log.warning("vehicle_detector_unavailable", error=str(exc))
         return None
@@ -104,7 +105,7 @@ def build_container_reader(settings=None):
 
     try:
         known = load_known(settings.container_known_list_path)
-        ocr = OnnxContainerOCR(settings.container_ocr_model_path, known=known)
+        ocr = OnnxContainerOCR(settings.container_ocr_model_path, known=known, threads=1)
     except RuntimeError as exc:
         log.warning("container_reader_unavailable", error=str(exc))
         return None
@@ -131,6 +132,7 @@ def build_pipeline(
         votes_required=votes_required,
         vehicle_detector=build_vehicle_detector(),
         container_reader=build_container_reader(),
+        container_every_n_frames=get_settings().container_every_n_frames,
     )
 
 

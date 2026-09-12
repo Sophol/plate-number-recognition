@@ -69,6 +69,15 @@ class Settings(BaseSettings):
     vehicle_backend: str = "off"
     vehicle_model_path: str = "models/vehicle_detector.onnx"
 
+    # The vehicle + container chain runs on every Nth inference frame, not all
+    # of them. A container waits at the barrier for many seconds and the voter
+    # needs two agreeing reads within 15s, so 1-2 passes a second is plenty;
+    # running it on every frame pinned a shared 4-vCPU box at load 11.
+    container_every_n_frames: int = 3
+    # Threads per onnxruntime session. The default is every core, and three
+    # sessions each grabbing four cores oversubscribe a shared box badly.
+    ort_intra_op_threads: int = 2
+
 
 @lru_cache
 def get_settings() -> Settings:

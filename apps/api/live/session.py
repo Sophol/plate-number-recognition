@@ -245,7 +245,11 @@ class PreviewSession:
 
     def _analyse(self, image: np.ndarray, frame_ts: datetime) -> np.ndarray:
         """Runs detect -> warp -> OCR -> province on one frame (worker thread)."""
-        vehicles = self._vehicles.detect(image) if self._vehicles is not None else []
+        # The vehicle + container chain is the expensive part; the preview runs
+        # it on alternate frames, which is still more than once a second.
+        self._chain_tick = getattr(self, "_chain_tick", 0) + 1
+        run_chain = self._chain_tick % 2 == 0
+        vehicles = self._vehicles.detect(image) if (self._vehicles is not None and run_chain) else []
         primary = vehicles[0] if vehicles else None            # largest first
         for v in vehicles:
             draw_box(image, v.x1, v.y1, v.x2, v.y2,
@@ -291,7 +295,7 @@ class PreviewSession:
             )
 
         container_line = "no container number"
-        if self._containers is not None:
+        if self._containers is not None and run_chain:
             found = self._containers.read_frame(
                 image, [(v.x1, v.y1, v.x2, v.y2) for v in vehicles]
             )

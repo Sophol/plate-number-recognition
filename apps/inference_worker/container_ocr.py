@@ -68,6 +68,7 @@ class OnnxContainerOCR:
         charset_path: str | Path | None = None,
         known: KnownContainers | None = None,
         providers: list[str] | None = None,
+        threads: int | None = 1,
     ) -> None:
         path = Path(model_path)
         if not path.exists():
@@ -77,7 +78,10 @@ class OnnxContainerOCR:
         except ImportError as exc:  # pragma: no cover
             raise RuntimeError("onnxruntime is not installed") from exc
 
-        self.session = ort.InferenceSession(str(path), providers=providers or ["CPUExecutionProvider"])
+        from apps.inference_worker.onnx_detector import _session_options
+
+        self.session = ort.InferenceSession(str(path), sess_options=_session_options(threads),
+                                            providers=providers or ["CPUExecutionProvider"])
         self.input_name = self.session.get_inputs()[0].name
 
         charset_file = Path(charset_path) if charset_path else path.with_name("container_ocr_charset.json")

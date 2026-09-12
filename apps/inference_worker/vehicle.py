@@ -126,7 +126,8 @@ class OnnxVehicleDetector:
     """
 
     def __init__(self, model_path: str | Path, conf: float = 0.35,
-                 iou: float = 0.5, providers: list[str] | None = None) -> None:
+                 iou: float = 0.5, providers: list[str] | None = None,
+                 threads: int | None = 2) -> None:
         path = Path(model_path)
         if not path.exists():
             raise RuntimeError(f"vehicle model not found: {path}")
@@ -135,7 +136,10 @@ class OnnxVehicleDetector:
         except ImportError as exc:  # pragma: no cover
             raise RuntimeError("onnxruntime is not installed") from exc
 
-        self.session = ort.InferenceSession(str(path), providers=providers or ["CPUExecutionProvider"])
+        from apps.inference_worker.onnx_detector import _session_options
+
+        self.session = ort.InferenceSession(str(path), sess_options=_session_options(threads),
+                                            providers=providers or ["CPUExecutionProvider"])
         inp = self.session.get_inputs()[0]
         self.input_name = inp.name
         self.imgsz = inp.shape[2] if isinstance(inp.shape[2], int) else 640

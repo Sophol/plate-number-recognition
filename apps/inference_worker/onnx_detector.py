@@ -27,6 +27,19 @@ from apps.inference_worker.interfaces import Detection
 
 log = structlog.get_logger()
 
+
+def _session_options(threads: int | None):
+    """Cap onnxruntime's threads. Its default is every core per session, and
+    several sessions on a shared box oversubscribe it into load-average double
+    digits; the small models here gain almost nothing past two threads."""
+    import onnxruntime as ort
+
+    opts = ort.SessionOptions()
+    if threads:
+        opts.intra_op_num_threads = threads
+        opts.inter_op_num_threads = 1
+    return opts
+
 DEFAULT_IMGSZ = 640
 # 0.25 is YOLO's conventional default and is too low for a gate. A busy
 # barrier scene is full of plate-shaped rectangles - hazard stripes, container
@@ -49,6 +62,7 @@ class OnnxPlateDetector:
         iou: float = DEFAULT_IOU,
         max_detections: int = MAX_DETECTIONS,
         providers: list[str] | None = None,
+        threads: int | None = 2,
     ) -> None:
         path = Path(model_path)
         if not path.exists():
@@ -60,7 +74,8 @@ class OnnxPlateDetector:
             raise RuntimeError("onnxruntime is not installed") from exc
 
         self.session = ort.InferenceSession(
-            str(path), providers=providers or ["CPUExecutionProvider"]
+            str(path), sess_options=_session_options(threads),
+            providers=providers or ["CPUExecutionProvider"],
         )
         model_input = self.session.get_inputs()[0]
         self.input_name = model_input.name
