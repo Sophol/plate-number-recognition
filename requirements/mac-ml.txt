@@ -13,6 +13,8 @@ ultralytics>=8.3
 
 onnx>=1.17
 onnxruntime>=1.20
+# torch.onnx.export uses the dynamo path by default and needs this.
+onnxscript>=0.7
 
 opencv-python-headless>=4.10
 numpy>=2.2
