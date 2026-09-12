@@ -15,6 +15,9 @@ import {
   Vehicle,
   VehicleCreate,
   VehicleUpdate,
+  ContainerLookup,
+  ContainerRead,
+  ContainerReadQuery,
 } from './models';
 
 /** Drops undefined/null/'' so we never send empty filters as literal strings. */
@@ -67,6 +70,17 @@ export class ApiService {
 
   verifyPlateRead(id: string): Observable<PlateRead> {
     return this.http.post<PlateRead>(`${API_BASE}/plate-reads/${id}/verify`, {});
+  }
+
+  // --- containers ---
+  listContainerReads(q: ContainerReadQuery = {}): Observable<ContainerRead[]> {
+    return this.http.get<ContainerRead[]>(`${API_BASE}/container-reads`, {
+      params: params(q as Record<string, unknown>),
+    });
+  }
+
+  lookupContainer(number: string): Observable<ContainerLookup> {
+    return this.http.get<ContainerLookup>(`${API_BASE}/containers/${encodeURIComponent(number.trim())}`);
   }
 
   // --- vehicles ---

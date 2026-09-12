@@ -46,20 +46,42 @@
     }
     <p class="muted small legend">
       Box colour is OCR confidence — green ≥ 0.80, amber ≥ 0.50, red below.
-      The thin amber quad is the four-corner region used for perspective correction.
+      Cyan boxes are container numbers (label shows PAS status); grey boxes are vehicles.
     </p>
   </section>
 
   <section class="reads">
-    <h3>How each plate was read</h3>
+    <h3>What was read, and how</h3>
     @if (events().length === 0) {
       <p class="muted small">
-        No plates detected yet. Every detection appears here with the confidence
-        reported at each stage of the pipeline.
+        Nothing detected yet. Every plate, container number and vehicle appears
+        here with the confidence reported at each stage.
       </p>
     }
 
     @for (e of events(); track e.at) {
+      @if (e.kind === 'container') {
+        <article class="card read container-read">
+          <div class="read-head">
+            <span class="plate mono">{{ e.container_number }}</span>
+            <span class="tag" [class]="barClass(e.container_confidence ?? 0)">
+              {{ (e.container_confidence ?? 0) | number: '1.2-2' }}
+            </span>
+            @if (e.container_known === true) { <span class="tag ok">known to PAS</span> }
+            @else if (e.container_known === false) { <span class="tag warn">not in PAS</span> }
+            @else { <span class="tag off">PAS unavailable</span> }
+            @if (e.container_snapped) {
+              <span class="tag off" title="OCR read {{ e.container_ocr_text }}; corrected against the PAS list">corrected</span>
+            }
+            @if (e.vehicle_type) { <span class="tag off">{{ e.vehicle_colour }} {{ e.vehicle_type }}</span> }
+            <span class="muted small spacer-left">{{ e.at | date: 'HH:mm:ss' }}</span>
+          </div>
+          <p class="muted small footnote">
+            Container: candidate text bands read by the CRNN, kept only if the ISO 6346
+            check digit is correct, then looked up live in PAS cCntnrInfo.
+          </p>
+        </article>
+      } @else {
       <article class="card read">
         <div class="read-head">
           <span class="plate mono">{{ e.corrected_text || '??' }}</span>
@@ -69,14 +91,15 @@
           } @else {
             <span class="tag bad">invalid format</span>
           }
+          @if (e.vehicle_type) { <span class="tag off">{{ e.vehicle_colour }} {{ e.vehicle_type }}</span> }
           <span class="muted small spacer-left">{{ e.at | date: 'HH:mm:ss' }}</span>
         </div>
 
         <ol class="stages">
           <li>
             <span class="stage-name">1 · Detect</span>
-            <span class="meter"><i [class]="barClass(e.detector_confidence)"
-                                   [style.width.%]="e.detector_confidence * 100"></i></span>
+            <span class="meter"><i [class]="barClass(e.detector_confidence ?? 0)"
+                                   [style.width.%]="(e.detector_confidence ?? 0) * 100"></i></span>
             <span class="mono small">{{ e.detector_confidence | number: '1.2-2' }}</span>
             <span class="muted small">plate located in frame</span>
           </li>
@@ -90,8 +113,8 @@
           </li>
           <li>
             <span class="stage-name">3 · OCR</span>
-            <span class="meter"><i [class]="barClass(e.ocr_confidence)"
-                                   [style.width.%]="e.ocr_confidence * 100"></i></span>
+            <span class="meter"><i [class]="barClass(e.ocr_confidence ?? 0)"
+                                   [style.width.%]="(e.ocr_confidence ?? 0) * 100"></i></span>
             <span class="mono small">{{ e.ocr_confidence | number: '1.2-2' }}</span>
             <span class="muted small">middle zone read as <b class="mono">{{ e.ocr_text || '—' }}</b></span>
           </li>
@@ -119,6 +142,7 @@
           and is only written after the same text wins a vote across frames.
         </p>
       </article>
+      }
     }
   </section>
 </div>

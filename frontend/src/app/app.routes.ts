@@ -5,6 +5,7 @@ import { CamerasComponent } from './pages/cameras/cameras.component';
 import { PlateReadsComponent } from './pages/plate-reads/plate-reads.component';
 import { VehiclesComponent } from './pages/vehicles/vehicles.component';
 import { LiveComponent } from './pages/live/live.component';
+import { ContainersComponent } from './pages/containers/containers.component';
 
 export const routes: Routes = [
   { path: 'login', component: LoginComponent },
@@ -12,6 +13,7 @@ export const routes: Routes = [
   { path: 'cameras', component: CamerasComponent, canActivate: [authGuard] },
   { path: 'plate-reads', component: PlateReadsComponent, canActivate: [authGuard] },
   { path: 'vehicles', component: VehiclesComponent, canActivate: [authGuard] },
+  { path: 'containers', component: ContainersComponent, canActivate: [authGuard] },
   { path: '', pathMatch: 'full', redirectTo: 'plate-reads' },
   { path: '**', redirectTo: 'plate-reads' },
 ];

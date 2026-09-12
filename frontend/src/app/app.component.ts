@@ -12,6 +12,7 @@ import { AuthService } from './core/auth.service';
         <span class="brand">ANPR</span>
         <a routerLink="/live" routerLinkActive="active">Live</a>
         <a routerLink="/plate-reads" routerLinkActive="active">Plate reads</a>
+        <a routerLink="/containers" routerLinkActive="active">Containers</a>
         <a routerLink="/cameras" routerLinkActive="active">Cameras</a>
         <a routerLink="/vehicles" routerLinkActive="active">Vehicles</a>
         <span class="spacer"></span>

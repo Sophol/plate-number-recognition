@@ -55,7 +55,7 @@ export interface PlateRead {
   plate_crop_path: string | null;
   model_version: string;
   is_active_model: boolean;
-  is_valid: boolean;
+  is_valid?: boolean;
   is_verified: boolean;
   created_at: string;
 }
@@ -87,6 +87,43 @@ export interface PlateReadQuery {
   only_active_model?: boolean;
   limit?: number;
   offset?: number;
+}
+
+export interface ContainerRead {
+  id: string;
+  camera_id: string;
+  track_id: string | null;
+  container_number: string;
+  owner_code: string;
+  checksum_ok: boolean;
+  is_known: boolean | null;
+  ocr_text: string | null;
+  was_snapped: boolean;
+  confidence: number;
+  frame_ts: string;
+  model_version: string;
+  plate_read_id: string | null;
+  created_at: string;
+}
+
+export interface ContainerReadQuery {
+  camera_id?: string;
+  container_number?: string;
+  since?: string;
+  until?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface ContainerLookup {
+  number: string;
+  well_formed: boolean;
+  checksum_ok: boolean;
+  owner_code: string | null;
+  is_known: boolean | null;
+  read_count: number;
+  last_seen: string | null;
+  recent_reads: ContainerRead[];
 }
 
 export interface Vehicle {
@@ -135,17 +172,26 @@ export interface LiveCamera {
 
 /** One detection's trip through the pipeline, as the preview observed it. */
 export interface StageEvent {
+  /** 'plate' (default) or 'container'. */
+  kind?: 'plate' | 'container';
+  vehicle_type?: string | null;
+  vehicle_colour?: string | null;
+  container_number?: string | null;
+  container_confidence?: number | null;
+  container_known?: boolean | null;
+  container_snapped?: boolean;
+  container_ocr_text?: string | null;
   camera_id: string;
   at: string;
-  detector_confidence: number;
-  ocr_text: string;
-  ocr_confidence: number;
-  corrected_text: string;
+  detector_confidence?: number;
+  ocr_text?: string;
+  ocr_confidence?: number;
+  corrected_text?: string;
   province_code: string | null;
   province_confidence: number | null;
-  plate_type: string;
+  plate_type?: string;
   is_valid: boolean;
-  warped: boolean;
+  warped?: boolean;
 }
 
 export interface LiveEvents {

@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import make_asgi_app
 
-from apps.api.routes import auth, cameras, live, plate_reads, vehicles
+from apps.api.routes import auth, cameras, containers, live, plate_reads, vehicles
 
 app = FastAPI(title="Cambodia ANPR API", version="0.1.0")
 
@@ -17,6 +17,7 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(cameras.router)
 app.include_router(plate_reads.router)
+app.include_router(containers.router)
 app.include_router(vehicles.router)
 app.include_router(live.router)
 app.mount("/metrics", make_asgi_app())

@@ -11,6 +11,8 @@ from apps.inference_worker.interfaces import Detection
 _GREEN = (74, 222, 128)
 _AMBER = (56, 189, 248)
 _RED = (68, 68, 239)
+_GREY = (170, 170, 170)
+_CYAN = (230, 200, 40)
 
 
 def _box_color(confidence: float) -> tuple[int, int, int]:
@@ -54,6 +56,18 @@ def draw_detection(
         2,
         cv2.LINE_AA,
     )
+
+
+def draw_box(image: np.ndarray, x1: int, y1: int, x2: int, y2: int,
+             label: str, color: tuple[int, int, int], confidence: float | None = None) -> None:
+    """Outline any region -- a vehicle, a container number -- with a caption."""
+    cv2.rectangle(image, (x1, y1), (x2, y2), color, 2)
+    text = label if confidence is None else f"{label} {confidence:.2f}"
+    (tw, th), base = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+    top = max(y1 - th - base - 4, 0)
+    cv2.rectangle(image, (x1, top), (x1 + tw + 8, top + th + base + 4), color, -1)
+    cv2.putText(image, text, (x1 + 4, top + th + 2), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
+                (15, 23, 32), 2, cv2.LINE_AA)
 
 
 def draw_status(image: np.ndarray, lines: list[str]) -> None:

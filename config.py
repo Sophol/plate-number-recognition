@@ -49,6 +49,26 @@ class Settings(BaseSettings):
     province_model_path: str = "models/province_classifier.onnx"
     model_version: str = "v0-dev"
 
+    # PAS (port system) SQL gateway. Read-only source of every container number
+    # that has passed through the terminal -- a known-container lookup that is a
+    # far stronger check than the ISO 6346 checksum alone, and real owner-code
+    # distributions to ground the synthetic OCR data in.
+    pas_sql_url: str = ""
+
+    # Container-number recognition. "off" skips it entirely; "onnx" runs the
+    # trained CRNN. The known list is the fetched PAS export; without it reads
+    # are still checksum-validated but cannot be snapped or marked known.
+    container_backend: str = "off"
+    container_ocr_model_path: str = "models/container_ocr.onnx"
+    container_known_list_path: str = "dataset/pas/containers.json"
+    container_min_confidence: float = 0.5
+
+    # Vehicle type (car/truck/bus/motorcycle) and colour from a COCO-pretrained
+    # YOLO via ONNX. "off" skips it. Colour is a heuristic and unreliable at a
+    # steep overhead angle; type is dependable.
+    vehicle_backend: str = "off"
+    vehicle_model_path: str = "models/vehicle_detector.onnx"
+
 
 @lru_cache
 def get_settings() -> Settings:

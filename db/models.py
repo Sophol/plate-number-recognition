@@ -114,6 +114,46 @@ class PlateRead(Base):
     )
 
 
+class ContainerRead(Base):
+    """A shipping-container number read from a vehicle transit.
+
+    Its own table rather than columns on PlateRead: at this gate a truck's plate
+    is often below the frame while its container is not, so a container read
+    with no plate must still be recorded. plate_read_id links the two when both
+    were read on the same track.
+    """
+
+    __tablename__ = "container_reads"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    camera_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("cameras.id", ondelete="CASCADE"))
+    track_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    container_number: Mapped[str] = mapped_column(String(11))
+    owner_code: Mapped[str] = mapped_column(String(4))
+    checksum_ok: Mapped[bool] = mapped_column(Boolean, default=False)
+    # None when no PAS list was available to check against; that is a different
+    # fact from "checked and not found".
+    is_known: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    # The raw OCR string before normalisation and any snap to a known number.
+    ocr_text: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    was_snapped: Mapped[bool] = mapped_column(Boolean, default=False)
+    confidence: Mapped[float] = mapped_column(Float)
+
+    frame_ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    model_version: Mapped[str] = mapped_column(String(64))
+    plate_read_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("plate_reads.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_container_reads_number", "container_number"),
+        Index("ix_container_reads_camera_frame_ts", "camera_id", "frame_ts"),
+        Index("ix_container_reads_track_id", "track_id"),
+    )
+
+
 class Vehicle(Base):
     __tablename__ = "vehicles"
 

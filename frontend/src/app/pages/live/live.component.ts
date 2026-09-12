@@ -99,7 +99,7 @@ export class LiveComponent implements OnInit, OnDestroy {
 
   /** Min of detector and OCR, matching what the pipeline stores as confidence. */
   overall(e: StageEvent): number {
-    return Math.min(e.detector_confidence, e.ocr_confidence);
+    return Math.min(e.detector_confidence ?? 0, e.ocr_confidence ?? 0);
   }
 
   barClass(value: number): string {

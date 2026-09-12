@@ -10,13 +10,14 @@ from apps.inference_worker.ocr import TemplateOCR
 from apps.inference_worker.pipeline import CommittedRead, InferencePipeline
 from apps.inference_worker.province import EnglishZoneProvinceClassifier
 from config import get_settings
-from db.models import Outbox, PlateRead
+from db.models import ContainerRead, Outbox, PlateRead
 from db.session import SessionLocal
 
 log = structlog.get_logger()
 
 reads_committed = Counter("anpr_reads_committed_total", "Plate reads committed after voting")
 frames_processed = Counter("anpr_frames_processed_total", "Frames run through inference")
+containers_committed = Counter("anpr_containers_committed_total", "Container numbers committed after voting")
 
 
 def build_ocr(backend: str = "template", use_gpu: bool = False):
@@ -73,6 +74,44 @@ def build_detector(backend: str = "contour", model_path: str | None = None):
     return ContourPlateDetector()
 
 
+def build_vehicle_detector(settings=None):
+    """The COCO vehicle detector, or None when disabled or its model is absent."""
+    settings = settings or get_settings()
+    if settings.vehicle_backend != "onnx":
+        return None
+    from apps.inference_worker.vehicle import OnnxVehicleDetector
+
+    try:
+        return OnnxVehicleDetector(settings.vehicle_model_path)
+    except RuntimeError as exc:
+        log.warning("vehicle_detector_unavailable", error=str(exc))
+        return None
+
+
+def build_container_reader(settings=None):
+    """Locator + CRNN + PAS lookup, or None when disabled or the model is absent.
+
+    Like the detector fallback, a missing model degrades silently to "no
+    container reads" -- container_reader_unavailable is the line to alert on.
+    """
+    settings = settings or get_settings()
+    if settings.container_backend != "onnx":
+        return None
+    from apps.inference_worker.container import load_known
+    from apps.inference_worker.container_ocr import OnnxContainerOCR
+    from apps.inference_worker.container_pipeline import ContainerReader
+    from apps.inference_worker.pas import PasClient
+
+    try:
+        known = load_known(settings.container_known_list_path)
+        ocr = OnnxContainerOCR(settings.container_ocr_model_path, known=known)
+    except RuntimeError as exc:
+        log.warning("container_reader_unavailable", error=str(exc))
+        return None
+    pas = PasClient(settings.pas_sql_url, fallback=known) if settings.pas_sql_url else None
+    return ContainerReader(ocr, pas=pas, min_confidence=settings.container_min_confidence)
+
+
 def build_pipeline(
     model_version: str,
     votes_required: int,
@@ -90,6 +129,8 @@ def build_pipeline(
         province_classifier=EnglishZoneProvinceClassifier(TemplateOCR()),
         model_version=model_version,
         votes_required=votes_required,
+        vehicle_detector=build_vehicle_detector(),
+        container_reader=build_container_reader(),
     )
 
 
@@ -149,6 +190,26 @@ async def consume(queue: BoundedFrameQueue, pipeline: InferencePipeline) -> None
         except Exception:
             log.exception("inference_failed", camera_id=frame.camera_id)
             continue
+
+        try:
+            containers = await asyncio.to_thread(pipeline.process_containers, frame)
+        except Exception:
+            log.exception("container_inference_failed", camera_id=frame.camera_id)
+            containers = []
+        if containers:
+            async with SessionLocal() as session:
+                for c in containers:
+                    session.add(ContainerRead(
+                        id=c.id, camera_id=c.camera_id, container_number=c.container_number,
+                        owner_code=c.owner_code, checksum_ok=c.checksum_ok, is_known=c.is_known,
+                        ocr_text=c.ocr_text, was_snapped=c.was_snapped, confidence=c.confidence,
+                        frame_ts=c.frame_ts, model_version=c.model_version,
+                    ))
+                    log.info("container_committed", camera_id=c.camera_id,
+                             container_number=c.container_number, is_known=c.is_known,
+                             confidence=round(c.confidence, 3))
+                await session.commit()
+            containers_committed.inc(len(containers))
 
         if not committed:
             continue

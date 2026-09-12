@@ -18,12 +18,14 @@ import cv2
 import numpy as np
 import structlog
 
-from apps.api.live.annotate import draw_detection, draw_status, placeholder
+from apps.api.live.annotate import _CYAN, _GREY, draw_box, draw_detection, draw_status, placeholder
 from apps.api.live.devicesource import DeviceSource, parse_device
 from apps.api.live.filesource import LoopingFileSource
 from apps.api.live.probe import probe
 from apps.camera_worker.rtsp import RTSPSource
-from apps.inference_worker.main import build_detector, build_ocr
+from apps.inference_worker.main import (
+    build_container_reader, build_detector, build_ocr, build_vehicle_detector,
+)
 from apps.inference_worker.perspective import split_zones, warp_plate
 from apps.inference_worker.province import EnglishZoneProvinceClassifier
 from apps.inference_worker.validator import correct, validate
@@ -54,9 +56,14 @@ class StageEvent:
     plate_type: str
     is_valid: bool
     warped: bool
+    vehicle_type: str | None = None
+    vehicle_colour: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
+            "kind": "plate",
+            "vehicle_type": self.vehicle_type,
+            "vehicle_colour": self.vehicle_colour,
             "camera_id": self.camera_id,
             "at": self.at,
             "detector_confidence": round(self.detector_confidence, 3),
@@ -70,6 +77,35 @@ class StageEvent:
             "plate_type": self.plate_type,
             "is_valid": self.is_valid,
             "warped": self.warped,
+        }
+
+
+@dataclass
+class ContainerEvent:
+    """One container number read from a frame, with its PAS status."""
+
+    camera_id: str
+    at: str
+    container_number: str
+    confidence: float
+    is_known: bool | None
+    was_snapped: bool
+    ocr_text: str
+    vehicle_type: str | None = None
+    vehicle_colour: str | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "kind": "container",
+            "camera_id": self.camera_id,
+            "at": self.at,
+            "container_number": self.container_number,
+            "container_confidence": round(self.confidence, 3),
+            "container_known": self.is_known,
+            "container_snapped": self.was_snapped,
+            "container_ocr_text": self.ocr_text,
+            "vehicle_type": self.vehicle_type,
+            "vehicle_colour": self.vehicle_colour,
         }
 
 
@@ -101,6 +137,9 @@ class PreviewSession:
         self._detector = build_detector(settings.detector_backend, settings.detector_model_path)
         self._ocr = build_ocr(settings.ocr_backend, settings.ocr_use_gpu)
         self._province = EnglishZoneProvinceClassifier(self._ocr)
+        # Both are None when disabled in settings or their model is missing.
+        self._vehicles = build_vehicle_detector(settings)
+        self._containers = build_container_reader(settings)
 
     # --- viewer bookkeeping -------------------------------------------------
 
@@ -206,6 +245,12 @@ class PreviewSession:
 
     def _analyse(self, image: np.ndarray, frame_ts: datetime) -> np.ndarray:
         """Runs detect -> warp -> OCR -> province on one frame (worker thread)."""
+        vehicles = self._vehicles.detect(image) if self._vehicles is not None else []
+        primary = vehicles[0] if vehicles else None            # largest first
+        for v in vehicles:
+            draw_box(image, v.x1, v.y1, v.x2, v.y2,
+                     f"{v.colour} {v.vehicle_type}", _GREY, v.type_confidence)
+
         detections = self._detector.detect(image)
 
         for detection in detections:
@@ -240,20 +285,49 @@ class PreviewSession:
                     plate_type=plate_type,
                     is_valid=is_valid,
                     warped=detection.corners is not None,
+                    vehicle_type=primary.vehicle_type if primary else None,
+                    vehicle_colour=primary.colour if primary else None,
                 )
             )
+
+        container_line = "no container number"
+        if self._containers is not None:
+            found = self._containers.read_frame(
+                image, [(v.x1, v.y1, v.x2, v.y2) for v in vehicles]
+            )
+            if found is not None:
+                r, reg = found.result, found.region
+                status = ("known" if r.is_known else
+                          "NOT in PAS" if r.is_known is False else "PAS n/a")
+                draw_box(image, reg.x1, reg.y1, reg.x2, reg.y2,
+                         f"{r.number.canonical} {status}", _CYAN, r.confidence)
+                container_line = f"container {r.number.canonical} ({status})"
+                self._record(
+                    ContainerEvent(
+                        camera_id=self.camera_id,
+                        at=datetime.now(UTC).isoformat(),
+                        container_number=r.number.canonical,
+                        confidence=r.confidence,
+                        is_known=r.is_known,
+                        was_snapped=r.was_snapped,
+                        ocr_text=r.text,
+                        vehicle_type=primary.vehicle_type if primary else None,
+                        vehicle_colour=primary.colour if primary else None,
+                    )
+                )
 
         draw_status(
             image,
             [
                 f"{self.camera_name}  |  {self._fps:.1f} fps preview",
-                f"{len(detections)} plate(s) in frame",
+                f"{len(detections)} plate(s), {len(vehicles)} vehicle(s) in frame",
+                container_line,
                 frame_ts.strftime("%H:%M:%S"),
             ],
         )
         return image
 
-    def _record(self, event: StageEvent) -> None:
+    def _record(self, event: "StageEvent | ContainerEvent") -> None:
         self._events.append(event.as_dict())
         del self._events[:-100]
 

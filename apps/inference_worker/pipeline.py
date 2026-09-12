@@ -10,6 +10,7 @@ from apps.inference_worker.interfaces import OCR, Detector, ProvinceClassifier
 from apps.inference_worker.perspective import split_zones, warp_plate
 from apps.inference_worker.province import PrefixProvinceClassifier
 from apps.inference_worker.tracker import IoUTracker
+from apps.inference_worker.container_pipeline import ContainerVoter
 from apps.inference_worker.voting import Candidate, TrackVoter, VoteResult
 from plate_types import VANITY
 
@@ -35,6 +36,23 @@ class CommittedRead:
     is_valid: bool
 
 
+@dataclass(slots=True)
+class CommittedContainer:
+    """A container number that won its vote and is ready to persist."""
+
+    id: uuid.UUID
+    camera_id: str
+    container_number: str
+    owner_code: str
+    checksum_ok: bool
+    is_known: bool | None
+    ocr_text: str
+    was_snapped: bool
+    confidence: float
+    frame_ts: datetime
+    model_version: str
+
+
 class InferencePipeline:
     """detect -> warp -> zones -> OCR + province -> track -> validate -> vote.
 
@@ -55,6 +73,9 @@ class InferencePipeline:
         # detector: the contour fallback reports a fill ratio, not a real
         # probability, so this threshold means little until YOLO is in place.
         vanity_min_detector_confidence: float = 0.8,
+        vehicle_detector=None,
+        container_reader=None,
+        container_votes_required: int = 2,
     ) -> None:
         self.detector = detector
         self.ocr = ocr
@@ -65,6 +86,9 @@ class InferencePipeline:
         self.tracker = IoUTracker()
         self.voter = TrackVoter(votes_required=votes_required)
         self.prefix_province = PrefixProvinceClassifier()
+        self.vehicle_detector = vehicle_detector
+        self.container_reader = container_reader
+        self.container_voter = ContainerVoter(votes_required=container_votes_required)
 
     def process(self, frame: Frame) -> list[CommittedRead]:
         detections = self.detector.detect(frame.image)
@@ -116,6 +140,41 @@ class InferencePipeline:
             )
 
         return committed
+
+    def process_containers(self, frame: Frame) -> list[CommittedContainer]:
+        """Read a container number from the frame and commit it once per transit.
+
+        Separate from process() so the plate path and its tests are untouched:
+        a container read is its own event, voted by number rather than by
+        plate track, because the checksum has already filtered the noise that
+        plate voting exists to absorb.
+        """
+        if self.container_reader is None:
+            return []
+        vehicles = self.vehicle_detector.detect(frame.image) if self.vehicle_detector else []
+        found = self.container_reader.read_frame(
+            frame.image, [(v.x1, v.y1, v.x2, v.y2) for v in vehicles]
+        )
+        if found is None:
+            return []
+        vote = self.container_voter.add(frame.camera_id, found.result, frame.frame_ts)
+        if vote is None:
+            return []
+        return [
+            CommittedContainer(
+                id=uuid.uuid4(),
+                camera_id=frame.camera_id,
+                container_number=vote.number,
+                owner_code=vote.number[:4],
+                checksum_ok=True,
+                is_known=vote.is_known,
+                ocr_text=vote.ocr_text,
+                was_snapped=vote.was_snapped,
+                confidence=vote.confidence,
+                frame_ts=frame.frame_ts,
+                model_version=self.model_version,
+            )
+        ]
 
     def _resolve_province(self, plate_text: str, bottom_zone):
         """Prefer the plate's numeric prefix; fall back to reading the text zone."""

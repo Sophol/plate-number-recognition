@@ -92,6 +92,49 @@ class PlateReadOut(BaseModel):
     created_at: datetime
 
 
+class ContainerReadCreate(BaseModel):
+    camera_id: uuid.UUID
+    track_id: str | None = None
+    container_number: Annotated[str, StringConstraints(min_length=11, max_length=11, to_upper=True)]
+    confidence: float
+    frame_ts: datetime
+    model_version: str
+    ocr_text: str | None = None
+    plate_read_id: uuid.UUID | None = None
+
+
+class ContainerReadOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    camera_id: uuid.UUID
+    track_id: str | None
+    container_number: str
+    owner_code: str
+    checksum_ok: bool
+    is_known: bool | None
+    ocr_text: str | None
+    was_snapped: bool
+    confidence: float
+    frame_ts: datetime
+    model_version: str
+    plate_read_id: uuid.UUID | None
+    created_at: datetime
+
+
+class ContainerLookupOut(BaseModel):
+    """What the system knows about one container number."""
+
+    number: str
+    well_formed: bool
+    checksum_ok: bool
+    owner_code: str | None
+    is_known: bool | None      # None when the PAS list is not loaded on this server
+    read_count: int
+    last_seen: datetime | None
+    recent_reads: list[ContainerReadOut]
+
+
 class VehicleCreate(BaseModel):
     plate_text: str = Field(max_length=32)
     owner_name: str | None = None
