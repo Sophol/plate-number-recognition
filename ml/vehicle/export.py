@@ -56,8 +56,14 @@ def main() -> None:
         raise SystemExit(f"{classes_path} not found - the export needs the class order")
     classes = load_classes(classes_path)
 
-    model = build_model(len(classes), pretrained=False)
-    model.load_state_dict(torch.load(args.weights, map_location="cpu"))
+    state = torch.load(args.weights, map_location="cpu")
+    # A model trained with dropout has a Sequential head (fc.1.weight); one
+    # without has a plain Linear (fc.weight). Rebuild whichever the checkpoint
+    # used so load_state_dict matches -- the dropout rate itself is irrelevant at
+    # export time (eval mode makes Dropout an identity), only the structure is.
+    had_dropout = "fc.1.weight" in state
+    model = build_model(len(classes), pretrained=False, dropout=0.5 if had_dropout else 0.0)
+    model.load_state_dict(state)
     model.eval()
 
     args.out.parent.mkdir(parents=True, exist_ok=True)

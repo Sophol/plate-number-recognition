@@ -45,19 +45,28 @@ def preprocess(crop: np.ndarray) -> np.ndarray:
     return rgb.transpose(2, 0, 1)
 
 
-def build_model(num_classes: int, pretrained: bool = True):
+def build_model(num_classes: int, pretrained: bool = True, dropout: float = 0.0):
     """ResNet-18 with a resized head, matching the province classifier.
 
     ImageNet weights help even here: the early layers learn the smooth-region
     and highlight cues that separate a shadowed red panel from a shadowed blue
     one, which is most of what a body-colour call turns on.
+
+    `dropout` > 0 inserts a Dropout before the head, a regularisation lever
+    against the overfitting the first runs showed. That changes the head keys
+    (fc.1.* rather than fc.*), so export.py detects which a checkpoint used and
+    rebuilds to match; dropout=0 keeps the plain Linear head, loadable exactly as
+    before.
     """
     from torch import nn
     from torchvision.models import ResNet18_Weights, resnet18
 
     weights = ResNet18_Weights.IMAGENET1K_V1 if pretrained else None
     model = resnet18(weights=weights)
-    model.fc = nn.Linear(model.fc.in_features, num_classes)
+    if dropout > 0:
+        model.fc = nn.Sequential(nn.Dropout(dropout), nn.Linear(model.fc.in_features, num_classes))
+    else:
+        model.fc = nn.Linear(model.fc.in_features, num_classes)
     return model
 
 

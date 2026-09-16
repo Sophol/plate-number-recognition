@@ -87,6 +87,15 @@ def main() -> None:
     parser.add_argument("--device", default="auto")
     parser.add_argument("--seed", type=int, default=1337)
     parser.add_argument("--min-per-class", type=int, default=20)
+    # Regularisation levers against the overfitting the first runs showed
+    # (train loss -> 0.04 while val stalled). Dropout on the head, label
+    # smoothing, a heavier weight decay, and freezing the early backbone so only
+    # the last block and head fine-tune, cutting trainable capacity.
+    parser.add_argument("--dropout", type=float, default=0.0)
+    parser.add_argument("--label-smoothing", type=float, default=0.0)
+    parser.add_argument("--weight-decay", type=float, default=1e-4)
+    parser.add_argument("--freeze-backbone", action="store_true",
+                        help="train only layer4 + head; freeze the rest")
     args = parser.parse_args()
 
     import torch
@@ -123,12 +132,25 @@ def main() -> None:
     print(f"{len(samples)} crops, {len(present)} colours: {dict(present)}")
     print(f"train {len(train_samples)} / val {len(val_samples)}\n")
 
-    model = build_model(len(classes)).to(device)
+    model = build_model(len(classes), dropout=args.dropout).to(device)
+
+    if args.freeze_backbone:
+        # Everything up to layer4 is frozen; only layer4 and the head learn.
+        # A pretrained ResNet's early layers already give the edges and smooth-
+        # region cues colour needs, so refitting them on synthetic crops mostly
+        # buys overfitting.
+        for name, param in model.named_parameters():
+            param.requires_grad = name.startswith(("layer4", "fc"))
+        trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        print(f"backbone frozen: {trainable/1e6:.1f}M of "
+              f"{sum(p.numel() for p in model.parameters())/1e6:.1f}M params trainable")
 
     counts = np.array([max(present.get(c, 0), 1) for c in classes], dtype=np.float32)
     weights = torch.from_numpy(counts.sum() / counts).to(device)
-    criterion = nn.CrossEntropyLoss(weight=weights)
-    optimiser = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
+    criterion = nn.CrossEntropyLoss(weight=weights, label_smoothing=args.label_smoothing)
+    optimiser = torch.optim.AdamW(
+        [p for p in model.parameters() if p.requires_grad],
+        lr=args.lr, weight_decay=args.weight_decay)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimiser, T_max=args.epochs)
 
     train_order = list(range(len(train_samples)))
