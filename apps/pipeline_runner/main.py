@@ -121,6 +121,7 @@ class CaptureSet:
 
 async def run(
     metrics_port: int | None = None,
+    metrics_addr: str = "127.0.0.1",
     load_cameras: Callable[[], Awaitable[list]] | None = None,
     reload_seconds: float | None = None,
 ) -> None:
@@ -129,8 +130,14 @@ async def run(
     reload_seconds = settings.camera_reload_seconds if reload_seconds is None else reload_seconds
 
     if metrics_port:
-        start_http_server(metrics_port)
-        log.info("metrics_server_started", port=metrics_port)
+        # Bind the metrics endpoint to loopback by default. prometheus_client
+        # defaults to 0.0.0.0, which on a gate box publishes camera ids, read
+        # counts, and gate decisions to anyone who can route to it -- an
+        # unauthenticated read of who drove through and when. A Prometheus
+        # running elsewhere should reach this over the same tunnel or reverse
+        # proxy as the rest of the console, or be given an explicit address.
+        start_http_server(metrics_port, metrics_addr)
+        log.info("metrics_server_started", port=metrics_port, addr=metrics_addr)
 
     queue = BoundedFrameQueue(settings.frame_queue_maxsize)
     pipeline = build_pipeline(
@@ -191,10 +198,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--metrics-port", type=int, default=None,
                         help="serve Prometheus metrics on this port")
+    parser.add_argument("--metrics-addr", default="127.0.0.1",
+                        help="address the metrics endpoint binds to "
+                             "(default: 127.0.0.1; use 0.0.0.0 to expose it)")
     args = parser.parse_args()
 
     try:
-        asyncio.run(run(args.metrics_port))
+        asyncio.run(run(args.metrics_port, args.metrics_addr))
     except KeyboardInterrupt:
         log.info("pipeline_runner_stopped")
 
