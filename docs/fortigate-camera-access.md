@@ -6,16 +6,71 @@ id.
 
 ## The problem
 
-The ANPR server needs to pull RTSP video from the PAS cameras. Every connection
-to the camera IP is currently intercepted by the FortiGate **web filter** — an
-HTTP request to any port returns the FortiGate "Web Filter Violation" block
-page, and RTSP connections are reset. Confirmed from two hosts on the VPN (the
-ANPR server and a laptop), so it is the FortiGate on the path, not the cameras.
+The ANPR server (`192.168.150.64`) needs to pull RTSP video from the PAS
+cameras. There are two known camera addresses, and **both are blocked at the
+FortiGate**, which is also the server's default gateway (`192.168.150.7`):
 
-The fix is **not** a web-filter URL exemption: RTSP is not HTTP, so the web
+| Camera path              | Symptom from the server            | Cause                                    |
+| ------------------------ | ---------------------------------- | ---------------------------------------- |
+| `124.199.112.138` (public) | HTTP returns "Web Filter Violation"; RTSP reset | FortiGate web filter intercepts the flow |
+| `10.101.10.150` (camera VLAN) | every port times out, ping 100% loss | no route/policy from `192.168.150.0/24` to `10.101.10.0/24` |
+
+The server's routing table has only `192.168.150.0/24` direct and a default
+route via the FortiGate, so reaching the camera VLAN also depends on the
+FortiGate. Either path can be opened; the internal one is cleaner.
+
+**A web-filter URL exemption does not help** — RTSP is not HTTP, so the web
 filter cannot classify it and resets it regardless. What is needed is a
-dedicated firewall policy for this one flow **with UTM/security profiles turned
-off**, placed above the general outbound policy.
+dedicated firewall policy for the flow **with UTM/security profiles turned off**,
+placed above the general outbound policy.
+
+## Preferred fix: reach the cameras on the internal VLAN
+
+If the cameras are reachable at `10.101.10.0/24`, route the server there instead
+of out to the public IP — no NAT, no public exposure, and inter-VLAN traffic
+normally skips the web filter entirely. It needs a route (if the FortiGate is
+the L3 gateway for both subnets it already has one) plus this policy:
+
+```
+config firewall address
+    edit "ANPR-Server"
+        set subnet 192.168.150.64/32
+    next
+    edit "PAS-Cameras-VLAN"
+        set subnet 10.101.10.0/24
+    next
+end
+
+config firewall service custom
+    edit "RTSP-PAS-Cameras"
+        set protocol TCP/UDP/SCTP
+        set tcp-portrange 554 557 145 147
+    next
+end
+
+config firewall policy
+    edit 0
+        set name "ANPR-to-PAS-Cameras-LAN"
+        set srcintf "<interface for 192.168.150.0/24>"
+        set dstintf "<interface for 10.101.10.0/24>"
+        set srcaddr "ANPR-Server"
+        set dstaddr "PAS-Cameras-VLAN"
+        set schedule "always"
+        set service "RTSP-PAS-Cameras"
+        set action accept
+        set utm-status disable
+        set logtraffic all
+        set comments "ANPR server pulls RTSP from PAS cameras on the camera VLAN"
+    next
+end
+```
+
+If the internal path is available, use this and skip the public-IP rule below.
+
+## Fallback: reach the cameras on the public IP
+
+Use this only if `10.101.10.0/24` is not reachable through the FortiGate. It is
+the same idea but toward the internet-facing IP, so the UTM bypass matters more.
 
 ## Exact flow to permit
 
