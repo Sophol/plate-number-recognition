@@ -24,6 +24,50 @@ filter cannot classify it and resets it regardless. What is needed is a
 dedicated firewall policy for the flow **with UTM/security profiles turned off**,
 placed above the general outbound policy.
 
+## Evidence that the FortiGate is the block
+
+All gathered from the server (`192.168.150.64`). The same RTSP URL connects fine
+from a network that does not sit behind this FortiGate (a phone on mobile data,
+a home connection), which is why it "works on public" but fails from the server.
+
+1. **A FortiGate answers for the camera IP.** An HTTP request to the camera
+   returns a FortiGate block page, so the packet is intercepted before it ever
+   reaches the camera:
+
+   ```
+   $ curl -s -i http://124.199.112.138:145/
+   HTTP/1.1 403 Forbidden
+   <title>Web Filter Violation</title>
+   # page body contains the markers: fortinet, FGT
+   ```
+
+2. **The server's only route to the camera is through the FortiGate:**
+
+   ```
+   $ ip route get 124.199.112.138
+   124.199.112.138 via 192.168.150.7 dev ens160 src 192.168.150.64
+   ```
+
+3. **That gateway is a Fortinet device** — its MAC starts with Fortinet's
+   registered hardware prefix `4C:E1:75`:
+
+   ```
+   $ ip neigh show 192.168.150.7
+   192.168.150.7 dev ens160 lladdr 4c:e1:75:23:0f:2d REACHABLE
+   ```
+
+4. **The camera VLAN is unreachable** for the same reason: the server has one NIC
+   on `192.168.150.0/24`, and a manual static route to `10.101.10.0/24` via the
+   gateway still drops every packet (`ping` 100% loss) — the FortiGate is not
+   routing the server there.
+
+The block is a **403 block page, not a timeout**, which means the traffic is
+already permitted through the policy — it is the **Web Filter profile** on that
+policy resetting RTSP. Nothing on the server can bypass its own gateway's filter;
+the change must be made on the FortiGate. Its admin ports (22/443/8443/10443) are
+also closed to the server, so this cannot be done from `192.168.150.64` at all —
+it needs someone on the FortiGate's management network.
+
 ## Preferred fix: reach the cameras on the internal VLAN
 
 If the cameras are reachable at `10.101.10.0/24`, route the server there instead
