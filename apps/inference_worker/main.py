@@ -80,10 +80,23 @@ def build_vehicle_detector(settings=None):
     settings = settings or get_settings()
     if settings.vehicle_backend != "onnx":
         return None
-    from apps.inference_worker.vehicle import OnnxVehicleDetector
+    from apps.inference_worker.vehicle import OnnxColourClassifier, OnnxVehicleDetector
+
+    # The learned colour classifier is optional: enable it with
+    # vehicle_colour_backend="onnx", but if its model is missing, log and carry
+    # on with the heuristic rather than dropping the whole vehicle detector.
+    colour_classifier = None
+    if settings.vehicle_colour_backend == "onnx":
+        try:
+            colour_classifier = OnnxColourClassifier(
+                settings.vehicle_colour_model_path, threads=settings.ort_intra_op_threads)
+            log.info("vehicle_colour_classifier_loaded", model=settings.vehicle_colour_model_path)
+        except RuntimeError as exc:
+            log.warning("vehicle_colour_classifier_unavailable_using_heuristic", error=str(exc))
 
     try:
-        return OnnxVehicleDetector(settings.vehicle_model_path, threads=settings.ort_intra_op_threads)
+        return OnnxVehicleDetector(settings.vehicle_model_path, threads=settings.ort_intra_op_threads,
+                                   colour_classifier=colour_classifier)
     except RuntimeError as exc:
         log.warning("vehicle_detector_unavailable", error=str(exc))
         return None

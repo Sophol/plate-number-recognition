@@ -81,6 +81,12 @@ class Settings(BaseSettings):
     # steep overhead angle; type is dependable.
     vehicle_backend: str = "off"
     vehicle_model_path: str = "models/vehicle_detector.onnx"
+    # Colour naming for detected vehicles. "heuristic" is the no-dependency HSV
+    # baseline in vehicle.py; "onnx" uses the trained classifier from ml/vehicle
+    # at the path below, and silently falls back to the heuristic if that model
+    # is absent, so enabling it can never leave the gate without a colour.
+    vehicle_colour_backend: str = "heuristic"
+    vehicle_colour_model_path: str = "models/vehicle_colour.onnx"
 
     # The vehicle + container chain runs on every Nth inference frame, not all
     # of them. A container waits at the barrier for many seconds and the voter
