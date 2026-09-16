@@ -43,8 +43,34 @@ def load_crops(crops_dir: Path, classes: list[str]) -> list[tuple[np.ndarray, in
     return samples
 
 
-def to_batch(samples, indices, torch):
-    images = np.stack([preprocess(samples[i][0]) for i in indices])
+def _augment(image: np.ndarray, rng) -> np.ndarray:
+    """Colour-label-safe augmentation applied fresh each epoch.
+
+    Flip, brightness, contrast and a small zoom teach lighting and framing
+    invariance. Hue is deliberately never touched: shifting it would change the
+    very label being learned. Re-varying every crop each epoch is what stopped
+    the first run memorising a fixed set and overfitting by epoch four.
+    """
+    img = image
+    if rng.random() < 0.5:
+        img = img[:, ::-1]
+    if rng.random() < 0.3:  # small zoom-in, then back to size
+        h, w = img.shape[:2]
+        m = rng.integers(1, max(2, h // 8))
+        img = img[m:h - m, m:w - m]
+    img = img.astype(np.float32)
+    img = (img - img.mean()) * rng.uniform(0.8, 1.2) + img.mean() * rng.uniform(0.85, 1.15)
+    return np.clip(img, 0, 255).astype(np.uint8)
+
+
+def to_batch(samples, indices, torch, rng=None):
+    def prep(i):
+        image = samples[i][0]
+        if rng is not None:
+            image = _augment(image, rng)
+        return preprocess(image)
+
+    images = np.stack([prep(i) for i in indices])
     labels = np.array([samples[i][1] for i in indices], dtype=np.int64)
     return torch.from_numpy(images), torch.from_numpy(labels)
 
@@ -106,6 +132,7 @@ def main() -> None:
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimiser, T_max=args.epochs)
 
     train_order = list(range(len(train_samples)))
+    aug_rng = np.random.default_rng(args.seed)
     best_accuracy, best_epoch = 0.0, 0
     args.out.mkdir(parents=True, exist_ok=True)
 
@@ -115,7 +142,7 @@ def main() -> None:
         total_loss = 0.0
         for start in range(0, len(train_order), args.batch):
             batch_indices = train_order[start : start + args.batch]
-            images, labels = to_batch(train_samples, batch_indices, torch)
+            images, labels = to_batch(train_samples, batch_indices, torch, rng=aug_rng)
             images, labels = images.to(device), labels.to(device)
             optimiser.zero_grad()
             loss = criterion(model(images), labels)
