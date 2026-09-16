@@ -1,0 +1,18 @@
+-r base.txt
+
+# Runtime deps for a CPU-only server: the API, the event worker, and the 24/7
+# pipeline runner. Deliberately not gpu.txt -- onnxruntime-gpu and the pinned
+# CUDA torch need hardware this box does not have, and nothing here trains:
+# torch, ultralytics, and paddle stay on the training Mac, which hands the
+# server an ONNX file and nothing else.
+#
+# RTSP goes through cv2.VideoCapture(CAP_FFMPEG), so opencv's bundled ffmpeg is
+# enough and `av` (which needs pkg-config + ffmpeg headers) is not required.
+# Pinned to the 5.x line to match the environment this project is actually
+# validated in. The Mac dev venv resolves dev.txt's `>=4.10` to 5.0.0 and the
+# full suite is green there; on 4.14 the classical contour locator behaves
+# differently and test_crossing_vehicles_lose_their_tracks picks up an extra
+# partial read ('0888' alongside '2D-0888'). gpu.txt's 4.10.0.84 pin belongs to
+# the CUDA worker image, which this CPU deployment does not use.
+opencv-python-headless>=5.0,<6
+onnxruntime>=1.20,<2

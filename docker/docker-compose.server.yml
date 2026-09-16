@@ -1,0 +1,57 @@
+# Server override for the infra containers. Use with the base file:
+#
+#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.server.yml \
+#       up -d postgres rabbitmq redis minio
+#
+# Three differences from the base file, all specific to a real deployment:
+#
+# 1. Every port binds to 127.0.0.1. The base file publishes on 0.0.0.0, which on
+#    a LAN server hands anyone who can route to it a Postgres on anpr/anpr, a
+#    RabbitMQ on guest/guest, and a MinIO on minioadmin. Every consumer -- the
+#    API, the event worker, the pipeline runner -- runs on this same host, so
+#    nothing needs to reach these from outside. Reach the RabbitMQ and MinIO
+#    consoles over an SSH tunnel:
+#       ssh -L 15672:127.0.0.1:15672 -L 9001:127.0.0.1:9001 mobile@<server>
+#
+#    `ports:` carries the `!override` tag because Compose MERGES sequences from
+#    an override file instead of replacing them. Without it each service ends up
+#    with both bindings -- 0.0.0.0:5432 and 127.0.0.1:5432 -- Docker binds the
+#    wildcard first, the loopback one then fails as "address already in use",
+#    and the container comes up with no published ports at all. The failure
+#    looks like a mystery port conflict; it is this file fighting the base file.
+#
+# 2. restart: unless-stopped, so the stack comes back after a reboot or a
+#    docker daemon restart without anyone logging in.
+#
+# 3. MinIO comes from quay.io. Docker Hub's minio/minio is no longer pullable
+#    ("pull access denied, repository does not exist"), and the tag is pinned to
+#    a release rather than :latest -- an object store silently jumping a major
+#    version under a running gate is not a surprise anyone wants.
+#
+# The `api` service from the base file is deliberately not started here: the API
+# runs natively under systemd (anpr-api.service) against the project venv, so it
+# shares one interpreter and one set of onnx models with the workers.
+
+services:
+  postgres:
+    restart: unless-stopped
+    ports: !override
+      - "127.0.0.1:5432:5432"
+
+  rabbitmq:
+    restart: unless-stopped
+    ports: !override
+      - "127.0.0.1:5672:5672"
+      - "127.0.0.1:15672:15672"
+
+  redis:
+    restart: unless-stopped
+    ports: !override
+      - "127.0.0.1:6379:6379"
+
+  minio:
+    restart: unless-stopped
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    ports: !override
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
